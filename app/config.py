@@ -3,6 +3,7 @@ Configuration management for WhatsApp AI Book Chatbot
 """
 import os
 from typing import Optional
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -11,13 +12,13 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     
     # WhatsApp
-    WHATSAPP_PHONE_NUMBER_ID: str
-    WHATSAPP_ACCESS_TOKEN: str
-    WEBHOOK_VERIFY_TOKEN: str
+    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
+    WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(default=None, alias="WHATSAPP_TOKEN")
+    WEBHOOK_VERIFY_TOKEN: Optional[str] = None
     WHATSAPP_API_VERSION: str = "v21.0"
     
     # Plug & Pay
-    PLUGNPAY_WEBHOOK_SECRET: Optional[str] = None
+    PLUGNPAY_WEBHOOK_SECRET: Optional[str] = Field(default=None, alias="PLUG_PAY_SECRET") # Support alias
     
     # OpenAI
     OPENAI_API_KEY: str
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore" # Ignore extra fields in .env
 
 
 settings = Settings()
