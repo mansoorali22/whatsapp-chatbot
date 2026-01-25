@@ -6,14 +6,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.config import settings
+from app.core.config import settings
+
 
 
 def setup_logging():
     """Configure application logging"""
     
-    # Create logs directory
-    log_dir = Path("logs")
+    # Create logs directory inside app/utils/logs
+    log_dir = Path(__file__).parent
     log_dir.mkdir(exist_ok=True)
     
     # Configure logging level
@@ -68,6 +69,8 @@ def setup_logging():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("asyncpg").setLevel(logging.INFO)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("langchain").setLevel(logging.WARNING)
     
     logging.info(f"Logging configured. Level: {settings.LOG_LEVEL}, Environment: {settings.ENVIRONMENT}")
 

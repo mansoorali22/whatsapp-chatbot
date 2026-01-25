@@ -3,18 +3,32 @@ from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
 from .connection import Base
 
+from sqlalchemy import Column, String, Integer, DateTime, Boolean, func
+from .connection import Base
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
+    
     id = Column(Integer, primary_key=True)
     whatsapp_number = Column(String(20), unique=True, index=True, nullable=False)
+    
+    # --- Status & Identification ---
     status = Column(String(20), default="inactive") # active, expired, blocked
+    plan_name = Column(String(50), nullable=True)   # Buddy Start, Buddy Pro, etc.
+    is_recurring = Column(Boolean, default=False)   # True for (3,4,5), False for (1,2)
     plugnpay_customer_id = Column(String(100), nullable=True)
-    plan_type = Column(String(50), nullable=True) # credit_pack, monthly_subscription
-    credits = Column(Integer, default=15) # Default 15 for trial
+    
+    # --- The Credit Economy ---
+    credits = Column(Integer, default=15)           # Current balance (Trial = 15)
+    total_purchased = Column(Integer, default=0)    # Lifetime credits bought
+    message_count = Column(Integer, default=0)      # Total questions asked
+    
+    # --- Trial & Subscription Logic ---
     is_trial = Column(Boolean, default=True)
     subscription_start = Column(DateTime(timezone=True), nullable=True)
-    subscription_end = Column(DateTime(timezone=True), nullable=True)
-    message_count = Column(Integer, default=0)
+    subscription_end = Column(DateTime(timezone=True), nullable=True) # Expiry date
+    
+    # --- Timestamps ---
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -42,4 +56,10 @@ class ChatLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 # High-performance Vector Index
-Index('idx_book_embedding', BookChunk.embedding, postgresql_using='hnsw', postgresql_ops={'embedding': 'vector_cosine_ops'})
+Index(
+    'idx_book_embedding', 
+    BookChunk.embedding, 
+    postgresql_using='hnsw', 
+    postgresql_with={'m': 16, 'ef_construction': 64},
+    postgresql_ops={'embedding': 'vector_cosine_ops'} 
+)

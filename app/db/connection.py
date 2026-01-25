@@ -14,12 +14,18 @@ class Base(DeclarativeBase):
     pass
 
 def init_db():
-    with engine.connect() as conn:
-        # Crucial for pgvector to work
+    # 1. Import models here so Base knows they exist before create_all
+    from app.db import models 
+    
+    with engine.begin() as conn:
+        # 2. Crucial for pgvector (Neon supports this)
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
-    # Create all tables defined in models.py
+        print("✅ Vector extension verified/created.")
+
+    # 3. Create all tables defined in models.py
+    # Since 'models' was imported above, Base.metadata now contains your tables
     Base.metadata.create_all(bind=engine)
+    print("✅ Database tables created successfully.")
 
 def get_db():
     db = SessionLocal()
