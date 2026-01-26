@@ -23,6 +23,25 @@ app.add_middleware(
 app.include_router(whatsapp.router, prefix="/whatsapp", tags=["WhatsApp"])
 app.include_router(plugnpay.router, prefix="/plugpay", tags=["Plug&Pay"])
 
+@app.get("/")
+def root():
+    """Root endpoint - confirms app is running"""
+    return {
+        "status": "online",
+        "service": "Atleet Buddy AI",
+        "message": "WhatsApp chatbot is running",
+        "endpoints": {
+            "docs": "/docs",
+            "whatsapp_webhook": "/whatsapp/webhook",
+            "plugpay_webhook": "/plugpay/webhook"
+        }
+    }
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "Atleet Buddy AI"}
+
 @app.on_event("startup")
 def on_startup():
     setup_logging()
