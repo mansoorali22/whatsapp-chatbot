@@ -16,6 +16,8 @@ from app.db.connection import SessionLocal
 from app.db.models import BookChunk
 from app.core.config import settings
 from app.utils.logger import setup_logging, get_logger
+from sqlalchemy import text
+
 
 setup_logging()
 
@@ -52,8 +54,9 @@ def ingest_book(file_path: str):
     db: Session = SessionLocal()
     
     try:
-        # Clear old chunks before re-ingesting (optional but helpful for MVP testing)
-        db.query(BookChunk).delete()
+        db.execute(text("TRUNCATE TABLE book_chunks RESTART IDENTITY;"))
+        db.commit()
+
         
         for i, chunk in enumerate(chunks):
             # Generate the 1536-dimensional vector
