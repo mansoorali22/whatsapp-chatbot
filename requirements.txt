@@ -54,7 +54,7 @@ ormsgpack==1.12.2
 packaging==25.0
 pgvector==0.4.2
 propcache==0.4.1
-psycopg2-binary==2.9.9
+psycopg[binary]==3.2.3
 pydantic==2.12.5
 pydantic-settings==2.12.0
 pydantic_core==2.41.5

@@ -7,6 +7,9 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# SQLAlchemy 2.0 will auto-detect psycopg (v3) if installed
+# If using psycopg v3, the connection string can stay as postgresql://
+# SQLAlchemy will prefer psycopg over psycopg2 if both are available
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
