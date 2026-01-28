@@ -1,9 +1,12 @@
 import logging
+import os
 from fastapi import APIRouter, Request, Response, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.db.connection import get_db
 from app.core.config import settings
+from dotenv import load_dotenv
 
+load_dotenv()
 router = APIRouter()
 
 # --- 1. THE VERIFICATION (GET) ---
@@ -13,8 +16,8 @@ async def verify_whatsapp(
     token: str = Query(None, alias="hub.verify_token"),
     challenge: str = Query(None, alias="hub.challenge")
 ):
-    # Change 'my_secret_token' to what you type in Meta Dashboard
-    VERIFY_TOKEN = "AtleetBuddy_2024" 
+    
+    VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
     
     if mode == "subscribe" and token == VERIFY_TOKEN:
         print("✅ Webhook Verified Successfully!")
