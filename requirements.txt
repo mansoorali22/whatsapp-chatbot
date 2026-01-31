@@ -55,7 +55,7 @@ numpy==2.2.6
 openai==2.15.0
 orjson==3.11.5
 ormsgpack==1.12.2
-packaging @ file:///C:/miniconda3/conda-bld/packaging_1761049096285/work
+packaging==23.1
 pgvector==0.3.6
 propcache==0.4.1
 psycopg==3.2.3
