@@ -10,6 +10,7 @@ from app.services.rag import get_response  # Your RAG logic
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 # -------------------------------
 # HELPER: SEND WHATSAPP MESSAGE
 # -------------------------------
@@ -74,28 +75,86 @@ async def receive_message(
     db: Session = Depends(get_db)
 ):
     """
-    Receives incoming WhatsApp messages and triggers background AI reply.
+    Receives incoming WhatsApp messages, stores them, 
+    keeps only the last N messages per user, 
+    and sends a static reply.
+    Treats every number as subscribed for now.
     """
-    body = await request.json()
     try:
-        if body.get("object") == "whatsapp_business_account":
-            entry = body["entry"][0]
-            changes = entry.get("changes", [])
-            for change in changes:
-                value = change.get("value", {})
-                messages = value.get("messages", [])
-                for message in messages:
-                    sender = message.get("from")
-                    text = message.get("text", {}).get("body")
-                    if sender and text:
-                        logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
-                        # Add background task to handle AI reply
-                        background_tasks.add_task(handle_rag_and_reply, sender, text, db)
-            return {"status": "success"}
+        body = await request.json()
+        if body.get("object") != "whatsapp_business_account":
+            return {"status": "ignored"}
+
+        entry = body["entry"][0]
+        changes = entry.get("changes", [])
+
+        for change in changes:
+            value = change.get("value", {})
+            messages = value.get("messages", [])
+
+            for message in messages:
+                message_id = message.get("id")
+                sender = message.get("from")
+                text = message.get("text", {}).get("body")
+
+                if not sender or not text or not message_id:
+                    continue
+
+                # --- Skip already processed messages ---
+                if db.query(ProcessedMessage).filter_by(message_id=message_id).first():
+                    continue
+
+                # --- Store processed message ID ---
+                db.add(ProcessedMessage(message_id=message_id))
+
+                # --- Treat every number as subscribed ---
+                subscription = db.query(Subscription).filter_by(whatsapp_number=sender).first()
+                if not subscription:
+                    subscription = Subscription(
+                        whatsapp_number=sender,
+                        status="active",
+                        plan_name="Default Plan",
+                        is_trial=True
+                    )
+                    db.add(subscription)
+                    db.commit()  # commit to get ID for message_count increment
+
+                subscription.message_count += 1
+
+                # --- Store chat log ---
+                chat_log = ChatLog(
+                    whatsapp_number=sender,
+                    user_message=text,
+                    bot_response="Message received!",
+                    response_type="static_reply"
+                )
+                db.add(chat_log)
+                db.commit()
+
+                # --- Keep only the last N messages per user ---
+                max_messages = settings.MAX_CHAT_LOG_MESSAGES
+                to_delete = (
+                    db.query(ChatLog)
+                    .filter_by(whatsapp_number=sender)
+                    .order_by(ChatLog.created_at.desc())
+                    .offset(max_messages)
+                    .all()
+                )
+                for old_msg in to_delete:
+                    db.delete(old_msg)
+                db.commit()
+
+                # --- Send static reply ---
+                background_tasks.add_task(send_whatsapp_message, sender, "Good Message Received!")
+
+                logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
+
+        return {"status": "success"}
+
     except Exception as e:
         logger.error(f"⚠️ Error parsing webhook payload: {e}")
-    return {"status": "ignored"}
-
+        return {"status": "ignored"}
+    
 # -------------------------------
 # 3️⃣ MANUAL SEND MESSAGE ENDPOINT
 # -------------------------------

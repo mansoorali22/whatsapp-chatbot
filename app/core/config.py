@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # Database
     # -------------------
     DATABASE_URL: str = "postgresql://temp:temp@localhost/temp"
+    MAX_CHAT_LOG_MESSAGES: int = 10 
     
     # -------------------
     # WhatsApp
