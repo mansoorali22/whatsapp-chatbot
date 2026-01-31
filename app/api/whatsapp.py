@@ -6,6 +6,7 @@ import httpx
 from app.db.connection import get_db
 from app.core.config import settings
 from app.services.rag import get_response  # Your RAG logic
+from app.models import Subscription, ChatLog, ProcessedMessage
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
