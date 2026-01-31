@@ -26,6 +26,7 @@ env/
 ENV/
 .venv
 
+tests
 # Environment variables
 .env
 .env.local
@@ -61,3 +62,8 @@ htmlcov/
 # Deployment
 .railway/
 .vercel/
+
+# Alembic
+migrations/
+alembic.
+alembic.ini

@@ -1,9 +1,5 @@
 from sqlalchemy import Column, String, Integer, DateTime, Text, JSON, Index, Boolean
 from sqlalchemy.sql import func
-from pgvector.sqlalchemy import Vector
-from .connection import Base
-
-from sqlalchemy import Column, String, Integer, DateTime, Boolean, func
 from .connection import Base
 
 class Subscription(Base):
@@ -38,28 +34,30 @@ class ProcessedMessage(Base):
     message_id = Column(String(255), primary_key=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class BookChunk(Base):
-    __tablename__ = "book_chunks"
-    id = Column(Integer, primary_key=True)
-    content = Column(Text, nullable=False)
-    embedding = Column(Vector(1536)) # Dimensions for OpenAI text-embedding-3-small
-    metadata_json = Column(JSON, nullable=True) # Chapter, section, page info
-
 class ChatLog(Base):
     __tablename__ = "chat_logs"
+    
     id = Column(Integer, primary_key=True)
+    
+    # --- Identification & Session ---
+    # WhatsApp number is our primary session ID for LangChain
     whatsapp_number = Column(String(20), index=True, nullable=False)
+    
+    # --- Interaction Data ---
     user_message = Column(Text, nullable=False)
     bot_response = Column(Text, nullable=False)
-    response_type = Column(String(50)) # answered, refused, error
-    chunks_used = Column(JSON, nullable=True)
+    
+    # --- LangChain Metadata (Optional but helpful) ---
+    # We store the role-based history in a JSON format LangChain understands
+    history_snapshot = Column(JSON, nullable=True) 
+
+    # --- Your Strict Mode A Audit Fields ---
+    response_type = Column(String(50)) # 'answered', 'refused', 'error'
+    chunks_used = Column(JSON, nullable=True) # IDs and metadata of the PDF chunks
+    
+    # --- Timestamps ---
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-# High-performance Vector Index
-Index(
-    'idx_book_embedding', 
-    BookChunk.embedding, 
-    postgresql_using='hnsw', 
-    postgresql_with={'m': 16, 'ef_construction': 64},
-    postgresql_ops={'embedding': 'vector_cosine_ops'} 
-)
+# High-performance index for finding a specific user's history
+Index('idx_user_history', ChatLog.whatsapp_number, ChatLog.created_at)
+

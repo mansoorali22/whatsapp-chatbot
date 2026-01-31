@@ -1,49 +1,112 @@
 """
 Configuration management for WhatsApp AI Book Chatbot
+Loads all environment variables from .env and makes them accessible via `settings`.
 """
-import os
+
+from pathlib import Path
 from typing import Optional
-from pydantic import Field
 from pydantic_settings import BaseSettings
+from pydantic import Field
+from pydantic_settings import SettingsConfigDict
+from dotenv import load_dotenv
+import os
 
+# -------------------------------
+# Determine project root & .env
+# -------------------------------
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / ".env"
 
+print(f"[Config] config.py location: {Path(__file__)}")
+print(f"[Config] Project root: {project_root}")
+print(f"[Config] .env path: {env_path}")
+print(f"[Config] .env exists: {env_path.exists()}")
+
+# Load dotenv as backup
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+    print("[Config] .env loaded successfully")
+else:
+    print("ERROR: .env file not found!")
+    if project_root.exists():
+        print(f"[Config] Files in {project_root}:")
+        for f in project_root.iterdir():
+            print(f"  - {f.name}")
+
+# -------------------------------
+# Pydantic Settings
+# -------------------------------
 class Settings(BaseSettings):
+    # -------------------
     # Database
-    DATABASE_URL: str
+    # -------------------
+    DATABASE_URL: str = "postgresql://temp:temp@localhost/temp"
     
+    # -------------------
     # WhatsApp
-    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
-    WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(default=None, alias="WHATSAPP_TOKEN")
+    # -------------------
+    WHATSAPP_PHONE_ID: Optional[str] = None
+    WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(default=None, alias="WHATSAPP_ACCESS_TOKEN")
+    WHATSAPP_BUSINESS_ACCOUNT_ID: Optional[str] = None
     WEBHOOK_VERIFY_TOKEN: Optional[str] = None
     WHATSAPP_API_VERSION: str = "v21.0"
     
+    # -------------------
     # Plug & Pay
-    PLUGNPAY_WEBHOOK_SECRET: Optional[str] = Field(default=None, alias="PLUG_PAY_SECRET") # Support alias
+    # -------------------
+    PLUG_N_PAY_TOKEN: Optional[str] = Field(default=None, alias="PLUG_N_PAY_TOKEN")
     
+    # -------------------
     # OpenAI
-    OPENAI_API_KEY: str
+    # -------------------
+    OPENAI_API_KEY: str = "temp-key"
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIMENSION: int = 1536
     
+    # -------------------
     # App Config
+    # -------------------
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
     DAILY_MESSAGE_LIMIT: int = 50
     
+    # -------------------
     # RAG Settings
+    # -------------------
     RETRIEVAL_TOP_K: int = 5
     SIMILARITY_THRESHOLD: float = 0.7
     MAX_TOKENS_RESPONSE: int = 500
     
+    # -------------------
     # Book Info
+    # -------------------
     BOOK_TITLE: str = "Eat like an athlete"
     DEFAULT_LANGUAGE: str = "English"
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore" # Ignore extra fields in .env
+    # -------------------
+    # Pydantic Config
+    # -------------------
+    model_config = SettingsConfigDict(
+        env_file=env_path,
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
-
+# -------------------------------
+# Instantiate settings
+# -------------------------------
 settings = Settings()
+
+# -------------------------------
+# Optional debug print to verify
+# -------------------------------
+print("\n[Config] Settings loaded successfully:")
+print(f"  DATABASE_URL: {settings.DATABASE_URL[:50]}...")
+print(f"  OPENAI_API_KEY: {settings.OPENAI_API_KEY[:7]}...")
+print(f"  WHATSAPP_ACCESS_TOKEN: {str(settings.WHATSAPP_ACCESS_TOKEN)[:7]}...")
+print(f"  WHATSAPP_PHONE_ID: {settings.WHATSAPP_PHONE_ID}")
+print(f"  WHATSAPP_BUSINESS_ACCOUNT_ID: {settings.WHATSAPP_BUSINESS_ACCOUNT_ID}")
+print(f"  WEBHOOK_VERIFY_TOKEN: {settings.WEBHOOK_VERIFY_TOKEN}")
+print(f"  PLUG_N_PAY_TOKEN: {settings.PLUG_N_PAY_TOKEN}")

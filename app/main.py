@@ -6,7 +6,22 @@ from app.utils.logger import setup_logging
 from app.db.models import ProcessedMessage, Subscription
 from app.api import whatsapp, plugnpay
 
-app = FastAPI(title="Atleet Buddy AI")
+from contextlib import asynccontextmanager
+from app.services.rag import init_rag_components # Import your loader
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # STARTUP LOGIC
+    setup_logging()
+    init_db()
+    init_rag_components() # Initialize LLM and VectorStore here
+    print("🚀 Service Started: Atleet Buddy AI")
+    yield
+    # SHUTDOWN LOGIC (Optional: close DB pools)
+    print("🛑 Service Stopping...")
+
+app = FastAPI(title="Atleet Buddy AI", lifespan=lifespan)
+
 
 origins = [
     "http://localhost:3000",
@@ -41,8 +56,3 @@ def root():
 def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "Atleet Buddy AI"}
-
-@app.on_event("startup")
-def on_startup():
-    setup_logging()
-    init_db()
