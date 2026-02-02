@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # Database
     # -------------------
     DATABASE_URL: str = "postgresql://temp:temp@localhost/temp"
-    MAX_CHAT_LOG_MESSAGES: int = 10 
+    MAX_CHAT_LOG_MESSAGES: int = 5
     
     # -------------------
     # WhatsApp
@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = "temp-key"
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    OPENAI_TEMPERATURE: float = 0.0
     EMBEDDING_DIMENSION: int = 1536
     
     # -------------------
@@ -76,7 +77,7 @@ class Settings(BaseSettings):
     # RAG Settings
     # -------------------
     RETRIEVAL_TOP_K: int = 5
-    SIMILARITY_THRESHOLD: float = 0.7
+    SIMILARITY_THRESHOLD: float = 0.8
     MAX_TOKENS_RESPONSE: int = 500
     
     # -------------------

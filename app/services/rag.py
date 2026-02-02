@@ -1,6 +1,3 @@
-# app/services/rag.py
-import sys
-from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -13,20 +10,29 @@ from langchain_core.output_parsers import StrOutputParser
 from app.core.config import settings
 from app.db.models import ChatLog
 
-# Placeholders
+# -----------------------------
+# GLOBALS
+# -----------------------------
 llm = None
 retriever = None
-context_chain = None
+intent_chain = None
+rewrite_chain = None
 answer_chain = None
 
-def init_rag_components():
-    global llm, retriever, context_chain, answer_chain
 
-    embeddings = OpenAIEmbeddings(model=settings.OPENAI_EMBEDDING_MODEL)
+# -----------------------------
+# INIT RAG COMPONENTS
+# -----------------------------
+def init_rag_components():
+    global llm, retriever, intent_chain, rewrite_chain, answer_chain
+
+    embeddings = OpenAIEmbeddings(
+        model=settings.OPENAI_EMBEDDING_MODEL
+    )
 
     llm = ChatOpenAI(
         model=settings.OPENAI_MODEL,
-        temperature=0,
+        temperature=settings.OPENAI_TEMPERATURE,
         max_tokens=settings.MAX_TOKENS_RESPONSE
     )
 
@@ -37,65 +43,159 @@ def init_rag_components():
         use_jsonb=True,
     )
 
-    retriever = vectorstore.as_retriever(search_kwargs={"k": settings.RETRIEVAL_TOP_K})
+    retriever = vectorstore
 
-    # Chains
-    context_chain = ChatPromptTemplate.from_messages([
-        ("system", "You are a search query optimizer. Rewrite the message into a standalone search query."),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}")
-    ]) | llm | StrOutputParser()
+    # 1. Intent detection
+    intent_chain = (
+        ChatPromptTemplate.from_messages([
+            ("system", "Classify the user message. Return ONLY one word: GREETING or QUESTION."),
+            ("human", "{input}")
+        ])
+        | llm
+        | StrOutputParser()
+    )
 
-    answer_chain = ChatPromptTemplate.from_messages([
-        ("system", f"You are the {settings.BOOK_TITLE} Buddy AI. ONLY answer based on context:\n{{context}}"),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}")
-    ]) | llm | StrOutputParser()
+    # 2. Rewrite query (standalone query using chat history)
+    rewrite_chain = (
+        ChatPromptTemplate.from_messages([
+            (
+                "system",
+                "Rewrite the user message into a standalone search query using chat history. "
+                "Ignore previous AI errors. Return ONLY the rewritten query."
+            ),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}")
+        ])
+        | llm
+        | StrOutputParser()
+    )
 
-    print("✅ RAG Components initialized.")
+    # 3. Answer generation (validate-then-answer)
+    answer_chain = (
+        ChatPromptTemplate.from_messages([
+            (
+                "system",
+                f"You are the {settings.BOOK_TITLE} AI assistant. "
+                "You will receive excerpts from the book. "
+                "STRICT RULE: First check whether the excerpts actually answer the question. "
+                "If yes, summarize them clearly. "
+                "If not, say exactly: 'I don’t know. This is outside the book’s context.'"
+            ),
+            ("system", "Context excerpts:\n{context}"),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}")
+        ])
+        | llm
+        | StrOutputParser()
+    )
 
+    print("✅ RAG components initialized")
+
+
+# -----------------------------
+# GET RESPONSE
+# -----------------------------
 def get_response(user_input: str, whatsapp_number: str, db: Session):
-    """Generate RAG-based answer for a WhatsApp message."""
-    if not all([llm, retriever, context_chain, answer_chain]):
-        raise ValueError("RAG components not initialized. Call init_rag_components() first.")
+    if not all([llm, retriever, intent_chain, rewrite_chain, answer_chain]):
+        init_rag_components()
 
-    # Fetch recent chat history
-    past_logs = db.query(ChatLog).filter(
-        ChatLog.whatsapp_number == whatsapp_number
-    ).order_by(desc(ChatLog.created_at)).limit(5).all()
+    # 1. Intent check
+    intent = intent_chain.invoke({"input": user_input}).strip().upper()
+    if "GREETING" in intent:
+        return "Hi 👋 How can I help you?"
+
+    # 2. Load chat history
+    past_logs = (
+        db.query(ChatLog)
+        .filter(ChatLog.whatsapp_number == whatsapp_number)
+        .order_by(desc(ChatLog.created_at))
+        .limit(settings.MAX_CHAT_LOG_MESSAGES)
+        .all()
+    )
 
     chat_history = []
     for log in reversed(past_logs):
         chat_history.append(HumanMessage(content=log.user_message))
         chat_history.append(AIMessage(content=log.bot_response))
 
-    # Rewritten query
-    standalone_q = context_chain.invoke({"chat_history": chat_history, "input": user_input})
+    # 3. Rewrite query
+    rewritten_query = rewrite_chain.invoke({
+        "chat_history": chat_history,
+        "input": user_input
+    })
+    print(f"🔍 DEBUG Rewritten Query: {rewritten_query}")
 
-    # Retrieval
-    docs = retriever.invoke(standalone_q)
-    if not docs:
-        docs = retriever.invoke(user_input)
+    # 4. Vector retrieval
+    docs_with_scores = retriever.similarity_search_with_score(
+        rewritten_query,
+        k=settings.RETRIEVAL_TOP_K
+    )
 
-    if not docs:
-        answer = "I'm sorry, I don't have information on that in the guide."
-        source_documents = []
+    relevant_docs = [
+        (doc, score)
+        for doc, score in docs_with_scores
+        if score <= settings.SIMILARITY_THRESHOLD
+    ]
+
+    print(f"📊 DEBUG: Found {len(relevant_docs)} relevant chunks")
+
+    # 5. Answer phase
+    if not relevant_docs:
+        answer = "I don’t know. This is outside the book’s context."
+        response_type = "refused"
+        used_docs = []
     else:
-        context_text = "\n\n".join([f"[Page {d.metadata.get('page', 'N/A')}]: {d.page_content}" for d in docs])
-        answer = answer_chain.invoke({"context": context_text, "chat_history": chat_history, "input": user_input})
-        source_documents = docs
+        context_text = "\n\n".join(
+            f"Excerpt [Page {doc.metadata.get('page', 'N/A')}]: {doc.page_content}"
+            for doc, _ in relevant_docs
+        )
 
-    # Log to DB
-    response_type = "answered" if "I'm sorry" not in answer else "refused"
-    new_log = ChatLog(
+        answer = answer_chain.invoke({
+            "context": context_text,
+            "chat_history": chat_history,
+            "input": user_input
+        })
+
+        response_type = "refused" if "I don’t know" in answer else "answered"
+        used_docs = [doc.metadata for doc, _ in relevant_docs]
+
+    # 6. Save chat log
+    db.add(ChatLog(
         whatsapp_number=whatsapp_number,
         user_message=user_input,
         bot_response=answer,
         response_type=response_type,
-        chunks_used=[doc.metadata for doc in source_documents],
-        history_snapshot=[{"role": "human" if isinstance(m, HumanMessage) else "ai", "content": m.content} for m in chat_history]
-    )
-    db.add(new_log)
+        chunks_used=used_docs,
+        history_snapshot=[
+            {
+                "role": "human" if isinstance(m, HumanMessage) else "ai",
+                "content": m.content
+            }
+            for m in chat_history
+        ]
+    ))
     db.commit()
+
+    # -----------------------------
+    # 7. CLEANUP OLD CHAT LOGS (FIXED)
+    # -----------------------------
+    keep_ids = (
+        db.query(ChatLog.id)
+        .filter(ChatLog.whatsapp_number == whatsapp_number)
+        .order_by(desc(ChatLog.created_at))
+        .limit(settings.MAX_CHAT_LOG_MESSAGES)
+        .all()
+    )
+
+    keep_ids = [id for (id,) in keep_ids]
+
+    if keep_ids:
+        (
+            db.query(ChatLog)
+            .filter(ChatLog.whatsapp_number == whatsapp_number)
+            .filter(~ChatLog.id.in_(keep_ids))
+            .delete(synchronize_session=False)
+        )
+        db.commit()
 
     return answer

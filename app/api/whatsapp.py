@@ -121,32 +121,8 @@ async def receive_message(
                     db.commit()  # commit to get ID for message_count increment
 
                 subscription.message_count += 1
-
-                # --- Store chat log ---
-                chat_log = ChatLog(
-                    whatsapp_number=sender,
-                    user_message=text,
-                    bot_response="Message received!",
-                    response_type="static_reply"
-                )
-                db.add(chat_log)
-                db.commit()
-
-                # --- Keep only the last N messages per user ---
-                max_messages = settings.MAX_CHAT_LOG_MESSAGES
-                to_delete = (
-                    db.query(ChatLog)
-                    .filter_by(whatsapp_number=sender)
-                    .order_by(ChatLog.created_at.desc())
-                    .offset(max_messages)
-                    .all()
-                )
-                for old_msg in to_delete:
-                    db.delete(old_msg)
-                db.commit()
-
-                # --- Send static reply ---
-                background_tasks.add_task(send_whatsapp_message, sender, "Good Message Received!")
+                
+                background_tasks.add_task(handle_rag_and_reply, sender, text, db)
 
                 logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
 

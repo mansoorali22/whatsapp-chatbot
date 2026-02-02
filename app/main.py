@@ -1,13 +1,25 @@
-from fastapi import FastAPI, Depends, Request
-from fastapi.middleware.cors import CORSMiddleware # 1. Import the middleware
-from sqlalchemy.orm import Session
-from app.db.connection import init_db, get_db
-from app.utils.logger import setup_logging
-from app.db.models import ProcessedMessage, Subscription
-from app.api import whatsapp, plugnpay
-
+# Standard library imports
 from contextlib import asynccontextmanager
-from app.services.rag import init_rag_components # Import your loader
+
+# FastAPI imports
+from fastapi import FastAPI, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+# SQLAlchemy imports
+from sqlalchemy.orm import Session
+
+# APScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+# App imports
+from app.db.connection import init_db, get_db, SessionLocal
+from app.db.models import ProcessedMessage, Subscription
+from app.utils.logger import setup_logging
+from app.utils.cleanup import run_processed_message_cleanup
+from app.api import whatsapp, plugnpay
+from app.services.rag import init_rag_components
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -15,12 +27,24 @@ async def lifespan(app: FastAPI):
     setup_logging()
     init_db()
     init_rag_components() # Initialize LLM and VectorStore here
-    print("🚀 Service Started: Atleet Buddy AI")
+    scheduler.add_job(
+        run_processed_message_cleanup,
+        CronTrigger(hour=0, minute=0),
+        id="midnight_cleanup",
+        replace_existing=True
+    )
+
+    scheduler.start()
+    print("🚀 Service Started: Atleet Buddy AI (Scheduler Running too)")
+
     yield
     # SHUTDOWN LOGIC (Optional: close DB pools)
+    scheduler.shutdown() # Stop the scheduler when the app closes
     print("🛑 Service Stopping...")
 
 app = FastAPI(title="Atleet Buddy AI", lifespan=lifespan)
+scheduler = BackgroundScheduler()
+
 
 
 origins = [
@@ -47,7 +71,7 @@ def root():
         "message": "WhatsApp chatbot is running",
         "endpoints": {
             "docs": "/docs",
-            "whatsapp_webhook": "/whatsapp/webhook",
+            "whatsapp_webhook": "/whatsapp/get-messages",
             "plugpay_webhook": "/plugpay/webhook"
         }
     }
