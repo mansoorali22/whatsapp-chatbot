@@ -76,9 +76,9 @@ class Settings(BaseSettings):
     # -------------------
     # RAG Settings
     # -------------------
-    RETRIEVAL_TOP_K: int = 5
-    SIMILARITY_THRESHOLD: float = 0.8
-    MAX_TOKENS_RESPONSE: int = 500
+    RETRIEVAL_TOP_K: int = 8
+    SIMILARITY_THRESHOLD: float = 1.0
+    MAX_TOKENS_RESPONSE: int = 600
     
     # -------------------
     # Book Info

@@ -48,7 +48,8 @@ def init_rag_components():
     # 1. Intent detection
     intent_chain = (
         ChatPromptTemplate.from_messages([
-            ("system", "Classify the user message. Return ONLY one word: GREETING or QUESTION."),
+            ("system", "Classify the user message. Return ONLY one word: GREETING or QUESTION. "
+             "Treat 'who are you', 'how does this work', 'hoe werkt dit', 'wie ben jij' as GREETING."),
             ("human", "{input}")
         ])
         | llm
@@ -60,8 +61,8 @@ def init_rag_components():
         ChatPromptTemplate.from_messages([
             (
                 "system",
-                "Rewrite the user message into a standalone search query using chat history. "
-                "Ignore previous AI errors. Return ONLY the rewritten query."
+                "Rewrite the user message into a standalone search query for finding relevant book content. "
+                "Use chat history for context. Keep the query in English for search. Return ONLY the rewritten query."
             ),
             MessagesPlaceholder("chat_history"),
             ("human", "{input}")
@@ -77,8 +78,11 @@ def init_rag_components():
                 "system",
                 f"You are the {settings.BOOK_TITLE} AI assistant. "
                 "You will receive excerpts from the book. "
-                "STRICT RULE: First check whether the excerpts actually answer the question. "
-                "If yes, summarize them clearly. "
+                "RULES: 1) Answer ONLY from the excerpts. 2) Answer in the SAME LANGUAGE as the user (Dutch or English). "
+                "3) If excerpts contain relevant info (even partial), use it. Include section/page when in labels. "
+                "4) For follow-up (e.g. on which page?, waar vind ik dat?), use excerpt labels or content. "
+                "5) Say 'I don't know. This is outside the book's context.' ONLY when excerpts clearly have nothing relevant. "
+                "If the excerpts help, summarize clearly. "
                 "If not, say exactly: 'I don’t know. This is outside the book’s context.'"
             ),
             ("system", "Context excerpts:\n{context}"),
@@ -102,7 +106,12 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
     # 1. Intent check
     intent = intent_chain.invoke({"input": user_input}).strip().upper()
     if "GREETING" in intent:
-        return "Hi 👋 How can I help you?"
+        return (
+            "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. "
+            "Ik beantwoord vragen alleen op basis van het boek. "
+            "Stel gerust een vraag over voeding, training of recepten. "
+            "Hi! I'm the Eat like an Athlete assistant. I answer only from the book. Ask me anything about nutrition, training or recipes."
+        )
 
     # 2. Load chat history
     past_logs = (
@@ -146,7 +155,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
         used_docs = []
     else:
         context_text = "\n\n".join(
-            f"Excerpt [Page {doc.metadata.get('page', 'N/A')}]: {doc.page_content}"
+            f"Excerpt [chunk {doc.metadata.get('chunk_index', '?')}, page {doc.metadata.get('page', 'N/A')}, section {doc.metadata.get('section', 'N/A')}]: {doc.page_content}"
             for doc, _ in relevant_docs
         )
 
@@ -156,7 +165,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
             "input": user_input
         })
 
-        response_type = "refused" if "I don’t know" in answer else "answered"
+        response_type = "refused" if "I don’t know" in answer or "Ik weet het niet" in answer or "buiten de context" in answer.lower() else "answered"
         used_docs = [doc.metadata for doc, _ in relevant_docs]
 
     # 6. Save chat log
