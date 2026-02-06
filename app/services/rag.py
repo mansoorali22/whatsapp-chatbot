@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import OperationalError
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_postgres import PGVector
@@ -134,11 +135,29 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
     })
     print(f"🔍 DEBUG Rewritten Query: {rewritten_query}")
 
-    # 4. Vector retrieval
-    docs_with_scores = retriever.similarity_search_with_score(
-        rewritten_query,
-        k=settings.RETRIEVAL_TOP_K
-    )
+    # 4. Vector retrieval (with retry on stale DB connection)
+    def _do_retrieval():
+        return retriever.similarity_search_with_score(
+            rewritten_query,
+            k=settings.RETRIEVAL_TOP_K
+        )
+
+    try:
+        docs_with_scores = _do_retrieval()
+    except OperationalError as e:
+        if "SSL connection" in str(e) or "closed" in str(e).lower() or "connection" in str(e).lower():
+            print("⚠️ DB connection stale, re-initializing RAG and retrying once...")
+            init_rag_components()
+            try:
+                docs_with_scores = _do_retrieval()
+            except Exception as retry_e:
+                print(f"❌ Retry failed: {retry_e}")
+                answer = "I don't know. This is outside the book's context."
+                db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", chunks_used=[], history_snapshot=[]))
+                db.commit()
+                return answer
+        else:
+            raise
 
     relevant_docs = [
         (doc, score)
