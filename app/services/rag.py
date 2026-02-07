@@ -11,6 +11,12 @@ from langchain_core.output_parsers import StrOutputParser
 from app.core.config import settings
 from app.db.models import ChatLog
 
+# Out-of-context reply (bilingual)
+REFUSAL_MESSAGE = (
+    "Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\n\n"
+    "Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!"
+)
+
 # -----------------------------
 # GLOBALS
 # -----------------------------
@@ -152,7 +158,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
                 docs_with_scores = _do_retrieval()
             except Exception as retry_e:
                 print(f"❌ Retry failed: {retry_e}")
-                answer = "I don't know. This is outside the book's context."
+                answer = REFUSAL_MESSAGE
                 db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", chunks_used=[], history_snapshot=[]))
                 db.commit()
                 return answer
@@ -169,12 +175,23 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
 
     # 5. Answer phase
     if not relevant_docs:
-        answer = "I don’t know. This is outside the book’s context."
+        answer = REFUSAL_MESSAGE
         response_type = "refused"
         used_docs = []
     else:
+        def _excerpt_label(meta):
+            page = meta.get("page")
+            chunk = meta.get("chunk_index", "?")
+            section = meta.get("section")
+            if page is not None and str(page).strip() and str(page) != "N/A":
+                part = f"page {page}"
+            else:
+                part = f"chunk {chunk}"
+            if section:
+                part += f", section {section}"
+            return part
         context_text = "\n\n".join(
-            f"Excerpt [chunk {doc.metadata.get('chunk_index', '?')}, page {doc.metadata.get('page', 'N/A')}, section {doc.metadata.get('section', 'N/A')}]: {doc.page_content}"
+            f"Excerpt [{_excerpt_label(doc.metadata)}]: {doc.page_content}"
             for doc, _ in relevant_docs
         )
 
@@ -184,7 +201,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
             "input": user_input
         })
 
-        response_type = "refused" if "I don’t know" in answer or "Ik weet het niet" in answer or "buiten de context" in answer.lower() else "answered"
+        response_type = "refused" if ("Unfortunately, I can't help" in answer or "Helaas kan ik je" in answer or "I don't know" in answer or "Ik weet het niet" in answer or "buiten de context" in answer.lower()) else "answered"
         used_docs = [doc.metadata for doc, _ in relevant_docs]
 
     # 6. Save chat log

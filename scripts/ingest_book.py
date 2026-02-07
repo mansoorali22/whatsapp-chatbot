@@ -72,6 +72,7 @@ def ingest_book_to_pgvector_only(file_path: str):
     # 5. Prepare LangChain Documents
     pgvector_documents = []
     for i, chunk in enumerate(chunks):
+        # Add "page": N to metadata when your source has page numbers so RAG replies cite by page.
         pgvector_documents.append(Document(
             page_content=chunk.page_content,
             metadata={

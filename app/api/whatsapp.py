@@ -1,9 +1,10 @@
 import logging
 from fastapi import APIRouter, Request, Response, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 import httpx
 
-from app.db.connection import get_db
+from app.db.connection import get_db, SessionLocal
 from app.core.config import settings
 from app.services.rag import get_response  # Your RAG logic
 from app.db.models import Subscription, ChatLog, ProcessedMessage
@@ -42,12 +43,17 @@ async def send_whatsapp_message(to: str, message_text: str):
 # -------------------------------
 # BACKGROUND TASK: RAG RESPONSE
 # -------------------------------
-async def handle_rag_and_reply(sender: str, text: str, db: Session):
+async def handle_rag_and_reply(sender: str, text: str):
     """
     Processes the RAG logic and sends a reply to the sender asynchronously.
+    Uses its own DB session to avoid stale connections (e.g. after app sleep).
     """
-    ai_answer = get_response(text, sender, db)
-    await send_whatsapp_message(sender, ai_answer)
+    db = SessionLocal()
+    try:
+        ai_answer = get_response(text, sender, db)
+        await send_whatsapp_message(sender, ai_answer)
+    finally:
+        db.close()
 
 # -------------------------------
 # 1️⃣ VERIFICATION (GET)
@@ -69,6 +75,38 @@ async def verify_whatsapp(
 # -------------------------------
 # 2️⃣ RECEIVE INCOMING MESSAGES (POST)
 # -------------------------------
+def _process_webhook_messages(body: dict, db: Session, background_tasks: BackgroundTasks) -> None:
+    """Process incoming webhook payload: dedupe, update subscription, queue RAG reply. Uses given db session."""
+    if body.get("object") != "whatsapp_business_account":
+        return
+    entry = body["entry"][0]
+    for change in entry.get("changes", []):
+        value = change.get("value", {})
+        for message in value.get("messages", []):
+            message_id = message.get("id")
+            sender = message.get("from")
+            text = message.get("text", {}).get("body")
+            if not sender or not text or not message_id:
+                continue
+            if db.query(ProcessedMessage).filter_by(message_id=message_id).first():
+                continue
+            db.add(ProcessedMessage(message_id=message_id))
+            subscription = db.query(Subscription).filter_by(whatsapp_number=sender).first()
+            if not subscription:
+                subscription = Subscription(
+                    whatsapp_number=sender,
+                    status="active",
+                    plan_name="Default Plan",
+                    is_trial=True
+                )
+                db.add(subscription)
+                db.commit()
+            subscription.message_count += 1
+            db.commit()
+            background_tasks.add_task(handle_rag_and_reply, sender, text)
+            logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
+
+
 @router.post("/get-messages")
 async def receive_message(
     request: Request,
@@ -76,8 +114,8 @@ async def receive_message(
     db: Session = Depends(get_db)
 ):
     """
-    Receives incoming WhatsApp messages, stores them, 
-    keeps only the last N messages per user, 
+    Receives incoming WhatsApp messages, stores them,
+    keeps only the last N messages per user,
     and sends a static reply.
     Treats every number as subscribed for now.
     """
@@ -86,45 +124,19 @@ async def receive_message(
         if body.get("object") != "whatsapp_business_account":
             return {"status": "ignored"}
 
-        entry = body["entry"][0]
-        changes = entry.get("changes", [])
-
-        for change in changes:
-            value = change.get("value", {})
-            messages = value.get("messages", [])
-
-            for message in messages:
-                message_id = message.get("id")
-                sender = message.get("from")
-                text = message.get("text", {}).get("body")
-
-                if not sender or not text or not message_id:
-                    continue
-
-                # --- Skip already processed messages ---
-                if db.query(ProcessedMessage).filter_by(message_id=message_id).first():
-                    continue
-
-                # --- Store processed message ID ---
-                db.add(ProcessedMessage(message_id=message_id))
-
-                # --- Treat every number as subscribed ---
-                subscription = db.query(Subscription).filter_by(whatsapp_number=sender).first()
-                if not subscription:
-                    subscription = Subscription(
-                        whatsapp_number=sender,
-                        status="active",
-                        plan_name="Default Plan",
-                        is_trial=True
-                    )
-                    db.add(subscription)
-                    db.commit()  # commit to get ID for message_count increment
-
-                subscription.message_count += 1
-                
-                background_tasks.add_task(handle_rag_and_reply, sender, text, db)
-
-                logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
+        try:
+            _process_webhook_messages(body, db, background_tasks)
+        except OperationalError as e:
+            err_str = str(e).lower()
+            if "ssl" in err_str or "closed" in err_str or "connection" in err_str:
+                logger.warning("⚠️ DB connection stale on webhook, retrying with fresh session...")
+                db_fresh = SessionLocal()
+                try:
+                    _process_webhook_messages(body, db_fresh, background_tasks)
+                finally:
+                    db_fresh.close()
+            else:
+                raise
 
         return {"status": "success"}
 
