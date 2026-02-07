@@ -19,7 +19,7 @@ REFUSAL_MESSAGE = (
 
 
 def _strip_refusal_from_answer(answer: str) -> str:
-    """Remove refusal phrases if the model wrongly appended them after useful content."""
+    """Remove refusal phrases and 'page number not in index' if the model wrongly added them."""
     if not answer or len(answer.strip()) < 20:
         return answer
     # Refusal phrases that must not appear after we have relevant excerpts
@@ -35,11 +35,23 @@ def _strip_refusal_from_answer(answer: str) -> str:
     for tail in refusal_tails:
         if tail in out:
             out = out.replace(tail, "").strip()
-    # Also strip trailing sentence that is only the old refusal
     for old in ("I don't know. This is outside the book's context.", "Ik weet het niet. Dit is buiten de context van het boek."):
         if out.endswith(old):
             out = out[: -len(old)].strip()
             break
+    # Remove "page number not in index" / "pagina nummer niet in index" (never show to user)
+    for bad in (
+        "(zie pagina nummer niet in index)",
+        "(page number not in index)",
+        "pagina nummer niet in index",
+        " page number not in index",
+    ):
+        if bad in out:
+            out = out.replace(bad, "").replace("  ", " ").strip()
+            if out.endswith("()."):
+                out = out[:-3].strip()
+            elif out.endswith("()"):
+                out = out[:-2].strip()
     return out if out else answer
 
 
@@ -54,8 +66,8 @@ def _is_refusal_response(answer: str) -> str:
             return "refused"
     if "Helaas kan ik je bij deze vraag niet helpen" in a and len(a) < 200:
         return "refused"
-    # If answer contains refusal but also substantive content (e.g. chunk 13), treat as answered
-    if "chunk" in a.lower() or "excerpt" in a.lower() or "page" in a.lower():
+    # If answer contains refusal but also substantive content (e.g. section 13, page 5), treat as answered
+    if "chunk" in a.lower() or "excerpt" in a.lower() or "page" in a.lower() or "section" in a.lower():
         return "answered"
     if "I don't know" in a or "Ik weet het niet" in a or "buiten de context" in a.lower():
         return "refused"
@@ -129,10 +141,10 @@ def init_rag_components():
             (
                 "system",
                 f"You are the {settings.BOOK_TITLE} AI assistant. "
-                "You will receive excerpts from the book. Each excerpt has a label like [page N] or [page number not in index]. "
+                "You will receive excerpts from the book. Each excerpt has a label like [page N] or [section N]. "
                 "RULES: 1) Answer ONLY from the excerpts. 2) Answer in the SAME LANGUAGE as the user (Dutch or English). "
-                "3) If excerpts contain relevant info (even partial), you MUST answer from them. Do NOT say I don't know or outside context when you have relevant excerpts. When citing, always refer to PAGE NUMBER when the label has one (e.g. 'see page 42'); never mention chunk numbers to the user. "
-                "4) For 'on which page?' or 'waar vind ik dat?': if the label says [page N], say that page. If the label says [page number not in index], say the content is in the book but the exact page number is not provided in the index—do NOT mention chunks or add I don't know. "
+                "3) If excerpts contain relevant info (even partial), you MUST answer from them. Do NOT say I don't know or outside context when you have relevant excerpts. "
+                "4) Do NOT include page numbers or section references in your answer unless the user explicitly asks (e.g. 'on which page?', 'waar vind ik dat?', 'welke bladzijde', 'give me the reference'). When they do ask, give the reference from the label: use 'page N' if the label has it, otherwise 'section N'. Never say 'page number not in index' or 'niet in index' or similar—always give a concrete reference (page N or section N). "
                 "5) ONLY when excerpts have NOTHING relevant, reply with exactly: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\" then \"Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!\". Never mix: if you have relevant content, answer only that; if none, use only this refusal. "
             ),
             ("system", "Context excerpts:\n{context}"),
@@ -213,6 +225,9 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
         for doc, score in docs_with_scores
         if score <= settings.SIMILARITY_THRESHOLD
     ]
+    # If nothing under threshold, use top 3 retrieved so we don't refuse borderline questions (e.g. wedstrijdperiodes)
+    if not relevant_docs and docs_with_scores:
+        relevant_docs = list(docs_with_scores)[:3]
 
     print(f"📊 DEBUG: Found {len(relevant_docs)} relevant chunks")
 
@@ -223,15 +238,16 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
         used_docs = []
     else:
         def _excerpt_label(meta):
-            """Label excerpts by page when available; otherwise 'page number not in index' so we never show chunk numbers to the user."""
+            """Label excerpts: page when available, otherwise section N (so we always have a reference to give when asked)."""
             page = meta.get("page")
+            chunk = meta.get("chunk_index", "?")
             section = meta.get("section")
             if page is not None and str(page).strip() and str(page) != "N/A":
                 part = f"page {page}"
             else:
-                part = "page number not in index"
+                part = f"section {chunk}"
             if section:
-                part += f", section {section}"
+                part += f", {section}"
             return part
         context_text = "\n\n".join(
             f"Excerpt [{_excerpt_label(doc.metadata)}]: {doc.page_content}"
