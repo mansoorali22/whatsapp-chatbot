@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     # -------------------
     BOOK_TITLE: str = "Eat like an athlete"
     DEFAULT_LANGUAGE: str = "English"
+    # Total pages in the book (for ingest: assigns estimated page numbers to chunks so answers can cite "page N")
+    BOOK_TOTAL_PAGES: int = 250
     
     # -------------------
     # Pydantic Config

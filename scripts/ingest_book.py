@@ -30,11 +30,16 @@ def ingest_book_to_pgvector_only(file_path: str):
         logger.error(f"❌ File not found at: {file_path}")
         return
 
-    logger.info(f"📖 Reading DOCX: {file_path}")
-    
-    # 1. Load the Word Document
-    loader = Docx2txtLoader(file_path)
-    documents = loader.load()
+    # 1. Load: DOCX or TXT
+    if file_path.lower().endswith(".txt"):
+        logger.info(f"📖 Reading TXT: {file_path}")
+        with open(file_path, encoding="utf-8") as f:
+            content = f.read()
+        documents = [Document(page_content=content)]
+    else:
+        logger.info(f"📖 Reading DOCX: {file_path}")
+        loader = Docx2txtLoader(file_path)
+        documents = loader.load()
     
     # 2. Setup Chunking logic
     text_splitter = RecursiveCharacterTextSplitter(
@@ -69,16 +74,20 @@ def ingest_book_to_pgvector_only(file_path: str):
         except Exception as e:
             logger.warning(f"⚠️ Cleanup skipped (likely first run): {e}")
 
-    # 5. Prepare LangChain Documents
+    # 5. Prepare LangChain Documents (assign estimated page so every answer can cite "page N")
+    total_chunks = len(chunks)
+    total_pages = getattr(settings, "BOOK_TOTAL_PAGES", 250) or 250
     pgvector_documents = []
     for i, chunk in enumerate(chunks):
-        # Add "page": N to metadata when your source has page numbers so RAG replies cite by page.
+        # Spread chunks across the book so each has an estimated page number
+        page = 1 + round((i * (total_pages - 1)) / max(1, total_chunks - 1)) if total_chunks > 1 else 1
         pgvector_documents.append(Document(
             page_content=chunk.page_content,
             metadata={
                 "source": settings.BOOK_TITLE,
                 "chunk_index": i,
-                "document_type": "book"
+                "document_type": "book",
+                "page": page
             }
         ))
     
@@ -101,7 +110,14 @@ def ingest_book_to_pgvector_only(file_path: str):
         logger.info(f"📄 Sample {i+1} Metadata: {doc.metadata}")
 
 if __name__ == "__main__":
-    # Ensure this path is correct for your local machine
-    FILE_NAME = r"C:\Users\Abdullah Masood\Desktop\WhatsApp RAG\whatsapp-chatbot\Eet_als_een_atleet_2023_8e druk.docx"
-    
-    ingest_book_to_pgvector_only(FILE_NAME)
+    # Book in project folder: try .docx first, then .txt
+    docx_path = PROJECT_ROOT / "Eet_als_een_atleet_2023_8e druk.docx"
+    txt_path = PROJECT_ROOT / "Eet_als_een_atleet_2023_8e druk_tekst.txt"
+    if docx_path.exists():
+        file_path = str(docx_path)
+    elif txt_path.exists():
+        file_path = str(txt_path)
+    else:
+        logger.error("❌ No book file found. Add Eet_als_een_atleet_2023_8e druk.docx or Eet_als_een_atleet_2023_8e druk_tekst.txt to the project folder.")
+        sys.exit(1)
+    ingest_book_to_pgvector_only(file_path)
