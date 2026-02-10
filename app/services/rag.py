@@ -112,8 +112,9 @@ def init_rag_components():
     # 1. Intent detection
     intent_chain = (
         ChatPromptTemplate.from_messages([
-            ("system", "Classify the user message. Return ONLY one word: GREETING or QUESTION. "
-             "Treat 'who are you', 'how does this work', 'hoe werkt dit', 'wie ben jij' as GREETING."),
+            ("system", "Classify the user message. Return ONLY one word: GREETING, THANKS, or QUESTION. "
+             "Treat 'who are you', 'how does this work', 'hoe werkt dit', 'wie ben jij' as GREETING. "
+             "Treat 'thanks', 'thank you', 'bedankt', 'dank je', 'dankjewel' as THANKS (not GREETING)."),
             ("human", "{input}")
         ])
         | llm
@@ -176,6 +177,8 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
             "Stel gerust een vraag over voeding, training of recepten. "
             "Hi! I'm the Eat like an Athlete assistant. I answer only from the book. Ask me anything about nutrition, training or recipes."
         )
+    if "THANKS" in intent:
+        return "You're welcome! Ask me anything else about the book. Graag gedaan! Stel gerust nog een vraag over het boek."
 
     # 2. Load chat history
     past_logs = (
