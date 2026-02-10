@@ -126,7 +126,8 @@ def init_rag_components():
             (
                 "system",
                 "Rewrite the user message into a standalone search query for finding relevant book content. "
-                "Use chat history for context (e.g. if they ask 'on which page can I find the recipes?', the query must include 'recipes' so we find recipe excerpts). Keep the query in English for search. Return ONLY the rewritten query."
+                "Use chat history for context. Output the query in English only. "
+                "IMPORTANT: For the same topic, always use the same English search terms so retrieval returns the same excerpts (and same page numbers) whether the user asked in Dutch or English. Examples: recepten/recipes → 'recipes'; dagmenu/daily menu → 'daily menu'; voeding aanpassen/wedstrijd → 'competition nutrition' or 'training day menu'. So 'waar vind ik de recepten?' and 'on which page are the recipes?' must both become a query like 'recipes where in book' so the same pages are found. Return ONLY the rewritten query."
             ),
             MessagesPlaceholder("chat_history"),
             ("human", "{input}")
@@ -144,8 +145,8 @@ def init_rag_components():
                 "You will receive excerpts from the book. Each excerpt has a label like [page N] or [section N]. "
                 "RULES: 1) Answer ONLY from the excerpts. 2) Answer in the SAME LANGUAGE as the user (Dutch or English). "
                 "3) If excerpts contain relevant info (even partial), you MUST answer fully: summarize the actual content (e.g. what an ideal daily menu looks like—meals, examples, timing). Do NOT just say 'refer to page X'; give the substance from the excerpts so the user gets a complete answer. "
-                "4) Do NOT include page or section references in your answer unless the user explicitly asks (e.g. 'on which page?', 'waar vind ik dat?', 'welke bladzijde?'). When they do ask, give the page/section from the excerpt labels. "
-                "5) When the user asks where to find something (e.g. 'on which page can I find the recipes?'), use the excerpt labels and give the page or section. NEVER say I don't know or out of context for this; it is in scope. "
+                "4) Do NOT include page or section references in your answer unless the user explicitly asks (e.g. 'on which page?', 'waar vind ik dat?', 'welke bladzijde?'). When they do ask, give the page/section from the excerpt labels. Always use the same reference format in every answer: 'page N' (e.g. 'page 179, page 186'), whether the user asked in Dutch or English—do not use 'pagina' in Dutch and 'page' in English; use 'page N' consistently. "
+                "5) When the user asks where to find something, give the page numbers from the excerpt labels in your context. Report exactly the page numbers from those labels (e.g. if excerpts are [page 45], [page 67], say 'page 45, page 67')—the same topic must get the same page numbers whether the user asked in Dutch or English. NEVER say I don't know or out of context for this; it is in scope. "
                 "6) ONLY when excerpts have NOTHING relevant to the question, reply with exactly: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\" then \"Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!\". Never mix: if you have relevant content, answer only that; if none, use only this refusal. "
             ),
             ("system", "Context excerpts:\n{context}"),
