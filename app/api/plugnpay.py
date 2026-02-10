@@ -115,6 +115,12 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
     return event_type, normalized
 
 
+@router.get("")
+async def plugpay_root():
+    """Confirm Plug&Pay routes are mounted (e.g. GET /plugpay and GET /plugpay/webhook)."""
+    return {"service": "Plug&Pay webhook", "verify": "/plugpay/webhook?verify_token=YOUR_TOKEN"}
+
+
 @router.get("/webhook")
 async def plugnpay_webhook_verify(
     verify_token: Optional[str] = Query(None, alias="verify_token"),

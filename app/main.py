@@ -62,9 +62,9 @@ app.add_middleware(
 app.include_router(whatsapp.router, prefix="/whatsapp", tags=["WhatsApp"])
 app.include_router(plugnpay.router, prefix="/plugpay", tags=["Plug&Pay"])
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
-    """Root endpoint - confirms app is running"""
+    """Root endpoint - confirms app is running. HEAD allowed for Render health checks."""
     return {
         "status": "online",
         "service": "Atleet Buddy AI",
@@ -76,7 +76,7 @@ def root():
         }
     }
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
-    """Health check endpoint"""
+    """Health check endpoint. HEAD allowed for Render health checks."""
     return {"status": "healthy", "service": "Atleet Buddy AI"}
