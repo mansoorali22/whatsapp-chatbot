@@ -3,9 +3,10 @@ Plug & Pay webhook endpoint.
 Receives payment/subscription events and updates the Subscription table via payment_logic.
 """
 import logging
+import re
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.connection import get_db
@@ -88,7 +89,13 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
     )
     if not plan_name and order.get("products"):
         first = order["products"][0] if order["products"] else {}
-        plan_name = first.get("title") or first.get("name")
+        plan_name = first.get("title") or first.get("name") or first.get("slug") or ""
+
+    # Credits: also derive from product name/slug (e.g. atleet-buddy-credits-50 → 50)
+    if credits is None and plan_name:
+        m = re.search(r"credits[-_]?(\d+)|(\d+)\s*credits", plan_name, re.I)
+        if m:
+            credits = int(m.group(1) or m.group(2))
 
     # Customer ID from payment provider
     plugnpay_customer_id = (
@@ -106,6 +113,25 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
         "status": data.get("status") or body.get("status"),
     }
     return event_type, normalized
+
+
+@router.get("/webhook")
+async def plugnpay_webhook_verify(
+    verify_token: Optional[str] = Query(None, alias="verify_token"),
+):
+    """
+    Webhook confirmation: Plug & Pay or client can GET this URL with verify_token
+    to confirm the endpoint is valid. Returns 200 if token matches PLUG_N_PAY_TOKEN.
+    """
+    token = getattr(settings, "PLUG_N_PAY_TOKEN", None) or getattr(
+        settings, "PLUGNPAY_WEBHOOK_SECRET", None
+    )
+    if not token:
+        return {"status": "ok", "message": "Webhook endpoint active (no token set)"}
+    if verify_token and verify_token.strip() == token:
+        logger.info("Plug & Pay webhook verification successful")
+        return {"status": "verified", "message": "Webhook confirmed"}
+    return {"status": "ok", "message": "Webhook endpoint active"}
 
 
 @router.post("/webhook")
