@@ -3,6 +3,7 @@ Plug & Pay webhook endpoint.
 Receives payment/subscription events and updates the Subscription table via payment_logic.
 """
 import logging
+import os
 import re
 from typing import Any, Optional
 
@@ -26,6 +27,33 @@ _WEBHOOK_TOKEN_HEADERS = (
     "Authorization",
 )
 _WEBHOOK_TOKEN_BODY_KEYS = ("webhook_token", "verify_token", "secret", "token", "webhook_secret")
+
+# Keys that might hold a phone number in webhook payloads
+_PHONE_KEYS = ("whatsapp_number", "whatsapp", "phone", "phone_number", "mobile", "telephone")
+
+
+def _find_phone_in_dict(d: Any, depth: int = 0, max_depth: int = 4) -> Optional[str]:
+    """Recursively find first string that looks like a phone in dict (for varying payload shapes)."""
+    if depth > max_depth or not isinstance(d, dict):
+        return None
+    for key in _PHONE_KEYS:
+        val = d.get(key)
+        if val is None:
+            continue
+        if isinstance(val, str) and val.strip():
+            digits = "".join(c for c in val if c.isdigit())
+            if len(digits) >= 8:
+                return val.strip()
+        if isinstance(val, dict):
+            found = _find_phone_in_dict(val, depth + 1, max_depth)
+            if found:
+                return found
+    for v in d.values():
+        if isinstance(v, dict):
+            found = _find_phone_in_dict(v, depth + 1, max_depth)
+            if found:
+                return found
+    return None
 
 
 def _verify_webhook_token(request: Request, body: dict) -> bool:
@@ -56,14 +84,18 @@ def _verify_webhook_token(request: Request, body: dict) -> bool:
     headers_present = [h for h in _WEBHOOK_TOKEN_HEADERS if request.headers.get(h)]
     body_present = [k for k in _WEBHOOK_TOKEN_BODY_KEYS if body.get(k) is not None]
 
-    # PlugAndPay does not send a token; when provider sends nothing, accept the webhook
-    if not headers_present and not body_present:
-        logger.info("Plug&Pay webhook accepted (no token sent by provider)")
+    # PlugAndPay may not send any token; allow opt-in skip when they send nothing
+    skip_verify = getattr(settings, "PLUG_N_PAY_SKIP_VERIFY", False) or (
+        os.environ.get("PLUG_N_PAY_SKIP_VERIFY", "").strip().lower() in ("1", "true", "yes")
+    )
+    if skip_verify and not headers_present and not body_present:
+        logger.info("Plug&Pay webhook accepted without token (PLUG_N_PAY_SKIP_VERIFY=true)")
         return True
 
     logger.warning(
         "Webhook verification failed: invalid or missing token. "
-        "Headers present: %s; body keys present: %s.",
+        "Headers present: %s; body keys present: %s. "
+        "Set PLUG_N_PAY_TOKEN on Render, or PLUG_N_PAY_SKIP_VERIFY=true if provider does not send a token.",
         headers_present or "none",
         body_present or "none",
     )
@@ -74,25 +106,41 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
     """
     Normalize Plug & Pay (and similar) webhook payload into event_type + data dict
     with whatsapp_number and optional credits, plan_name, etc.
+    Handles both string type and PlugAndPay dict type: { "trigger_type": "order_invoice_created", ... }.
     """
-    # Plug & Pay style: { "type": "new_simple_sale", "data": { "order": {...}, "customer": {...} } }
-    event_type = body.get("type") or body.get("event") or body.get("event_type") or "payment_received"
-    data = body.get("data") or body
+    raw_type = body.get("type") or body.get("event") or body.get("event_type")
+    if isinstance(raw_type, dict):
+        event_type = raw_type.get("trigger_type") or raw_type.get("event") or "order_invoice_created"
+    else:
+        event_type = raw_type or "payment_received"
+    if not isinstance(event_type, str):
+        event_type = "payment_received"
 
-    # Flatten: if data is the full payload, use it; else build from order/customer
+    data = body.get("data") or body
     if not isinstance(data, dict):
         data = {}
 
-    order = data.get("order") or {}
-    customer = data.get("customer") or data.get("billing_details") or {}
-    custom_fields = order.get("custom_fields") or data.get("custom_fields") or {}
+    # PlugAndPay may send order/customer at top level or under data
+    order = data.get("order") or body.get("order") or {}
+    customer = data.get("customer") or body.get("customer") or body.get("billing_details") or {}
+    if not isinstance(order, dict):
+        order = {}
+    if not isinstance(customer, dict):
+        customer = {}
+    custom_fields = order.get("custom_fields") or data.get("custom_fields") or body.get("custom_fields") or {}
 
-    # WhatsApp number: custom_fields (E.164), then customer.phone, then top-level
+    # WhatsApp number: custom_fields, customer, order, data, body (multiple key names)
     whatsapp_number = (
         custom_fields.get("whatsapp_number")
         or custom_fields.get("whatsapp")
         or custom_fields.get("phone")
         or customer.get("phone")
+        or customer.get("phone_number")
+        or customer.get("mobile")
+        or customer.get("telephone")
+        or order.get("customer_phone")
+        or order.get("phone")
+        or order.get("whatsapp_number")
         or data.get("whatsapp_number")
         or data.get("whatsapp")
         or data.get("phone")
@@ -100,6 +148,9 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
         or body.get("whatsapp")
         or body.get("phone")
     )
+    # Last resort: deep search (PlugAndPay may nest order/customer differently)
+    if not whatsapp_number:
+        whatsapp_number = _find_phone_in_dict(body)
 
     # Credits: from product metadata, custom_fields, or fixed amount
     credits = (
@@ -207,7 +258,10 @@ async def plugnpay_webhook(
     )
 
     if not data.get("whatsapp_number"):
-        logger.warning("Webhook payload missing whatsapp_number; cannot link to subscription")
+        logger.warning(
+            "Webhook payload missing whatsapp_number; cannot link to subscription. Top-level keys: %s",
+            list(body.keys()) if isinstance(body, dict) else "n/a",
+        )
         return {"status": "ignored", "reason": "missing_whatsapp_number"}
 
     try:
