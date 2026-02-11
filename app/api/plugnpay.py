@@ -3,6 +3,7 @@ Plug & Pay webhook endpoint.
 Receives payment/subscription events and updates the Subscription table via payment_logic.
 """
 import logging
+import os
 import re
 from typing import Any, Optional
 
@@ -57,7 +58,9 @@ def _verify_webhook_token(request: Request, body: dict) -> bool:
     body_present = [k for k in _WEBHOOK_TOKEN_BODY_KEYS if body.get(k) is not None]
 
     # PlugAndPay may not send any token; allow opt-in skip when they send nothing
-    skip_verify = getattr(settings, "PLUG_N_PAY_SKIP_VERIFY", False)
+    skip_verify = getattr(settings, "PLUG_N_PAY_SKIP_VERIFY", False) or (
+        os.environ.get("PLUG_N_PAY_SKIP_VERIFY", "").strip().lower() in ("1", "true", "yes")
+    )
     if skip_verify and not headers_present and not body_present:
         logger.info("Plug&Pay webhook accepted without token (PLUG_N_PAY_SKIP_VERIFY=true)")
         return True
