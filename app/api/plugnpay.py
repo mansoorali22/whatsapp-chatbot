@@ -17,10 +17,21 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+# Header names and body keys that may carry the webhook secret (Plug&Pay / PlugAndPay vary)
+_WEBHOOK_TOKEN_HEADERS = (
+    "X-Webhook-Token",
+    "X-Webhook-Secret",
+    "X-PlugAndPay-Token",
+    "X-Plug-And-Pay-Token",
+    "Authorization",
+)
+_WEBHOOK_TOKEN_BODY_KEYS = ("webhook_token", "verify_token", "secret", "token", "webhook_secret")
+
+
 def _verify_webhook_token(request: Request, body: dict) -> bool:
     """
     Verify webhook authenticity using PLUG_N_PAY_TOKEN.
-    Checks common patterns: header (X-Webhook-Token, Authorization) or body field.
+    Checks common header and body field names used by Plug&Pay / PlugAndPay.
     """
     token = getattr(settings, "PLUG_N_PAY_TOKEN", None) or getattr(
         settings, "PLUGNPAY_WEBHOOK_SECRET", None
@@ -29,12 +40,29 @@ def _verify_webhook_token(request: Request, body: dict) -> bool:
         logger.warning("No PLUG_N_PAY_TOKEN or PLUGNPAY_WEBHOOK_SECRET set; skipping verification")
         return True
 
-    # Header: X-Webhook-Token or Authorization Bearer
-    auth_header = request.headers.get("X-Webhook-Token") or request.headers.get("Authorization")
-    if auth_header and auth_header.replace("Bearer ", "").strip() == token:
-        return True
-    if body.get("webhook_token") == token or body.get("verify_token") == token:
-        return True
+    # Headers
+    for name in _WEBHOOK_TOKEN_HEADERS:
+        value = request.headers.get(name)
+        if value:
+            compare = value.replace("Bearer ", "").strip()
+            if compare == token:
+                return True
+
+    # Body
+    for key in _WEBHOOK_TOKEN_BODY_KEYS:
+        if body.get(key) == token:
+            return True
+
+    # Log what was present (no values) to help configure token delivery
+    headers_present = [h for h in _WEBHOOK_TOKEN_HEADERS if request.headers.get(h)]
+    body_present = [k for k in _WEBHOOK_TOKEN_BODY_KEYS if body.get(k) is not None]
+    logger.warning(
+        "Webhook verification failed: invalid or missing token. "
+        "Headers present: %s; body keys present: %s. "
+        "Set PLUG_N_PAY_TOKEN on Render to the same value as in Plug&Pay webhook config.",
+        headers_present or "none",
+        body_present or "none",
+    )
     return False
 
 
@@ -121,12 +149,12 @@ async def plugpay_root():
     return {"service": "Plug&Pay webhook", "verify": "/plugpay/webhook?verify_token=YOUR_TOKEN"}
 
 
-@router.get("/webhook")
+@router.api_route("/webhook", methods=["GET", "HEAD"])
 async def plugnpay_webhook_verify(
     verify_token: Optional[str] = Query(None, alias="verify_token"),
 ):
     """
-    Webhook confirmation: Plug & Pay or client can GET this URL with verify_token
+    Webhook confirmation: Plug & Pay or client can GET/HEAD this URL with verify_token
     to confirm the endpoint is valid. Returns 200 if token matches PLUG_N_PAY_TOKEN.
     """
     token = getattr(settings, "PLUG_N_PAY_TOKEN", None) or getattr(
@@ -138,6 +166,13 @@ async def plugnpay_webhook_verify(
         logger.info("Plug & Pay webhook verification successful")
         return {"status": "verified", "message": "Webhook confirmed"}
     return {"status": "ok", "message": "Webhook endpoint active"}
+
+
+def _mask_number(num: str) -> str:
+    """Last 4 digits only for logs (e.g. ***231166)."""
+    if not num or len(num) < 4:
+        return "***"
+    return "***" + num[-6:] if len(num) > 6 else "***" + num[-4:]
 
 
 @router.post("/webhook")
@@ -156,10 +191,16 @@ async def plugnpay_webhook(
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     if not _verify_webhook_token(request, body):
-        logger.warning("Webhook verification failed: invalid or missing token")
         raise HTTPException(status_code=403, detail="Forbidden")
 
     event_type, data = _extract_event_and_data(body)
+    raw_number = (data.get("whatsapp_number") or data.get("whatsapp") or data.get("phone") or "")[:20]
+    logger.info(
+        "Plug&Pay webhook received: type=%s whatsapp=%s credits=%s",
+        event_type,
+        _mask_number(raw_number),
+        data.get("credits"),
+    )
 
     if not data.get("whatsapp_number"):
         logger.warning("Webhook payload missing whatsapp_number; cannot link to subscription")
@@ -167,6 +208,12 @@ async def plugnpay_webhook(
 
     try:
         ok = process_webhook_event(event_type, data, db)
+        logger.info(
+            "Plug&Pay webhook handled: type=%s whatsapp=%s status=%s",
+            event_type,
+            _mask_number(data.get("whatsapp_number", "")),
+            "ok" if ok else "ignored",
+        )
         return {"status": "ok" if ok else "ignored", "event_type": event_type}
     except Exception as e:
         logger.exception(f"Webhook processing error: {e}")

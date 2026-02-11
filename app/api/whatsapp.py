@@ -66,10 +66,15 @@ async def verify_whatsapp(
 ):
     """
     Endpoint used by WhatsApp Cloud API to verify webhook.
+    Meta sends GET with hub.mode=subscribe&hub.verify_token=YOUR_TOKEN&hub.challenge=...
+    Ensure WEBHOOK_VERIFY_TOKEN in Render env matches the token set in Meta Developer Console.
     """
-    if mode == "subscribe" and token == settings.WEBHOOK_VERIFY_TOKEN:
+    expected = getattr(settings, "WEBHOOK_VERIFY_TOKEN", None) or ""
+    token_ok = (token or "") == expected
+    if mode == "subscribe" and token_ok:
         logger.info("✅ Webhook Verified Successfully!")
-        return Response(content=challenge, media_type="text/plain")
+        return Response(content=challenge or "", media_type="text/plain")
+    logger.warning("Webhook verification failed: mode=%s token_match=%s (set WEBHOOK_VERIFY_TOKEN on Render)", mode, token_ok)
     return Response(content="Verification failed", status_code=403)
 
 # -------------------------------

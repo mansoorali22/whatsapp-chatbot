@@ -1,96 +1,66 @@
 """
-Test script for Plug & Pay webhook.
-Run the app first (uvicorn app.main:app), then run this script.
-Or use the curl commands in VERIFY_PLUGPAY_WEBHOOK.md against localhost or your Render URL.
+Test the Plug&Pay webhook without making a real payment.
 
-If Render has PLUG_N_PAY_TOKEN or PLUGNPAY_WEBHOOK_SECRET set, pass it so the request is accepted:
-  set PLUG_N_PAY_TOKEN=your_secret
-  python scripts/test_plugpay_webhook.py --render
+Usage:
+  # Test against local server (run app first: uvicorn app.main:app --port 10000)
+  python scripts/test_plugpay_webhook.py
+
+  # Test against Render
+  python scripts/test_plugpay_webhook.py https://whatsapp-chatbot-1-adqn.onrender.com
+
+  # Custom WhatsApp number and credits
+  python scripts/test_plugpay_webhook.py http://localhost:10000 31612345678 50
 """
 import os
 import sys
-import requests
+import json
+from pathlib import Path
 
-# Change to your base URL (local or Render)
-BASE_URL = "http://127.0.0.1:8000"
-# BASE_URL = "https://whatsapp-chatbot-ypib.onrender.com"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-WEBHOOK_URL = f"{BASE_URL}/plugpay/webhook"
+try:
+    import requests
+except ImportError:
+    print("Install requests: pip install requests")
+    sys.exit(1)
 
-# Optional: token for webhook verification (same as in Render env)
-WEBHOOK_TOKEN = os.environ.get("PLUG_N_PAY_TOKEN") or os.environ.get("PLUGNPAY_WEBHOOK_SECRET")
-
-
-def _headers():
-    if WEBHOOK_TOKEN:
-        return {"Content-Type": "application/json", "X-Webhook-Token": WEBHOOK_TOKEN}
-    return {"Content-Type": "application/json"}
+from app.core.config import settings
 
 
-def test_flat_payload():
-    """Minimal flat payload - just whatsapp_number."""
-    payload = {
-        "type": "payment_received",
-        "whatsapp_number": "+31612345678",
-        "credits": 20,
-        "plan_name": "Buddy Pro",
-    }
-    print("Sending flat payload:", payload)
-    r = requests.post(WEBHOOK_URL, json=payload, headers=_headers(), timeout=10)
-    print(f"Status: {r.status_code}, Response: {r.json()}")
-    return r.status_code == 200
+def main():
+    base = (sys.argv[1] or "http://localhost:10000").rstrip("/")
+    whatsapp = sys.argv[2] if len(sys.argv) > 2 else "31612345678"
+    credits = int(sys.argv[3]) if len(sys.argv) > 3 else 50
 
+    token = getattr(settings, "PLUG_N_PAY_TOKEN", None) or os.environ.get("PLUG_N_PAY_TOKEN")
+    if not token:
+        print("Set PLUG_N_PAY_TOKEN in .env or environment")
+        sys.exit(1)
 
-def test_plug_and_pay_style():
-    """Payload shaped like Plug & Pay (type + data with order/customer/custom_fields)."""
+    url = f"{base}/plugpay/webhook"
+    # Minimal payload that matches what the webhook expects
     payload = {
         "type": "new_simple_sale",
+        "verify_token": token,
         "data": {
-            "order": {
-                "custom_fields": {
-                    "whatsapp_number": "+31687654321",
-                    "credits": 15,
-                    "plan_name": "Buddy Start",
-                },
-            },
-            "customer": {
-                "id": "cust_plugpay_123",
-            },
+            "whatsapp_number": whatsapp,
+            "credits": credits,
+            "plan_name": "atleet-buddy-credits-50",
         },
     }
-    print("Sending Plug & Pay style payload")
-    r = requests.post(WEBHOOK_URL, json=payload, headers=_headers(), timeout=10)
-    print(f"Status: {r.status_code}, Response: {r.json()}")
-    return r.status_code == 200
+    headers = {"Content-Type": "application/json", "X-Webhook-Token": token}
 
-
-def test_subscription_cancelled():
-    """Test cancellation event."""
-    payload = {
-        "event_type": "subscription_cancelled",
-        "whatsapp_number": "+31687654321",
-    }
-    print("Sending subscription_cancelled payload")
-    r = requests.post(WEBHOOK_URL, json=payload, headers=_headers(), timeout=10)
-    print(f"Status: {r.status_code}, Response: {r.json()}")
-    return r.status_code == 200
+    print(f"POST {url}")
+    print(f"Body: {json.dumps(payload, indent=2)}")
+    r = requests.post(url, json=payload, headers=headers, timeout=15)
+    print(f"Status: {r.status_code}")
+    print(f"Response: {r.text}")
+    if r.status_code == 200:
+        print("OK – check your Subscription table for this WhatsApp number.")
+    else:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--render":
-        BASE_URL = "https://whatsapp-chatbot-ypib.onrender.com"
-        WEBHOOK_URL = f"{BASE_URL}/plugpay/webhook"
-        print(f"Using Render URL: {WEBHOOK_URL}")
-    if not WEBHOOK_TOKEN and "render" in str(sys.argv).lower():
-        print("Tip: Set PLUG_N_PAY_TOKEN or PLUGNPAY_WEBHOOK_SECRET to avoid 403 (Render has token set).\n")
-
-    print("--- Test 1: Flat payload (create/update subscription) ---")
-    test_flat_payload()
-    print()
-    print("--- Test 2: Plug & Pay style payload ---")
-    test_plug_and_pay_style()
-    print()
-    print("--- Test 3: Subscription cancelled ---")
-    test_subscription_cancelled()
-    print()
-    print("Done. Check your database: SELECT * FROM subscriptions;")
+    main()
