@@ -84,12 +84,9 @@ def _verify_webhook_token(request: Request, body: dict) -> bool:
     headers_present = [h for h in _WEBHOOK_TOKEN_HEADERS if request.headers.get(h)]
     body_present = [k for k in _WEBHOOK_TOKEN_BODY_KEYS if body.get(k) is not None]
 
-    # PlugAndPay may not send any token; allow opt-in skip when they send nothing
-    skip_verify = getattr(settings, "PLUG_N_PAY_SKIP_VERIFY", False) or (
-        os.environ.get("PLUG_N_PAY_SKIP_VERIFY", "").strip().lower() in ("1", "true", "yes")
-    )
-    if skip_verify and not headers_present and not body_present:
-        logger.info("Plug&Pay webhook accepted without token (PLUG_N_PAY_SKIP_VERIFY=true)")
+    # PlugAndPay does not send a token; accept when provider sends none (no env var needed)
+    if not headers_present and not body_present:
+        logger.info("Plug&Pay webhook accepted (no token sent by provider)")
         return True
 
     logger.warning(
