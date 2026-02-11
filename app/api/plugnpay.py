@@ -53,13 +53,19 @@ def _verify_webhook_token(request: Request, body: dict) -> bool:
         if body.get(key) == token:
             return True
 
-    # Log what was present (no values) to help configure token delivery
     headers_present = [h for h in _WEBHOOK_TOKEN_HEADERS if request.headers.get(h)]
     body_present = [k for k in _WEBHOOK_TOKEN_BODY_KEYS if body.get(k) is not None]
+
+    # PlugAndPay may not send any token; allow opt-in skip when they send nothing
+    skip_verify = getattr(settings, "PLUG_N_PAY_SKIP_VERIFY", False)
+    if skip_verify and not headers_present and not body_present:
+        logger.info("Plug&Pay webhook accepted without token (PLUG_N_PAY_SKIP_VERIFY=true)")
+        return True
+
     logger.warning(
         "Webhook verification failed: invalid or missing token. "
         "Headers present: %s; body keys present: %s. "
-        "Set PLUG_N_PAY_TOKEN on Render to the same value as in Plug&Pay webhook config.",
+        "Set PLUG_N_PAY_TOKEN on Render, or PLUG_N_PAY_SKIP_VERIFY=true if provider does not send a token.",
         headers_present or "none",
         body_present or "none",
     )

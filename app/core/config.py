@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     # Plug & Pay
     # -------------------
     PLUG_N_PAY_TOKEN: Optional[str] = Field(default=None, alias="PLUG_N_PAY_TOKEN")
+    # Set to "1" or "true" if PlugAndPay does not send a webhook token (they may not support it)
+    PLUG_N_PAY_SKIP_VERIFY: bool = False
     
     # -------------------
     # OpenAI
