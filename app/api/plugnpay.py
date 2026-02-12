@@ -51,6 +51,7 @@ async def _fetch_order_phone(order_id: int) -> Optional[str]:
     )
     token = getattr(settings, "PLUG_N_PAY_TOKEN", None) or os.environ.get("PLUG_N_PAY_TOKEN")
     if not token:
+        logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_TOKEN not set on Render")
         return None
     path = PLUGANDPAY_ORDER_PATH.format(id=order_id)
     url = api_url.rstrip("/") + path
@@ -58,7 +59,7 @@ async def _fetch_order_phone(order_id: int) -> Optional[str]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
             if r.status_code != 200:
-                logger.debug("PlugAndPay API order %s returned %s", order_id, r.status_code)
+                logger.warning("PlugAndPay API order %s returned %s: %s", order_id, r.status_code, r.text[:200] if r.text else "")
                 return None
             data = r.json()
             if not isinstance(data, dict):
@@ -74,6 +75,7 @@ async def _fetch_order_phone(order_id: int) -> Optional[str]:
                     phone = _find_phone_in_dict(data[key])
                     if phone:
                         return phone
+            logger.warning("PlugAndPay API order %s: response 200 but no phone field in JSON (top-level keys: %s)", order_id, list(data.keys()) if isinstance(data, dict) else "n/a")
     except Exception as e:
         logger.warning("PlugAndPay API fetch order %s failed: %s", order_id, e)
     return None
@@ -310,16 +312,34 @@ async def plugnpay_webhook(
     # When webhook has no phone but has order reference (event.triggerable_id), try to fetch order from API
     if not data.get("whatsapp_number"):
         event_obj = body.get("event") if isinstance(body.get("event"), dict) else None
-        if event_obj and event_obj.get("triggerable_type") == "order":
+        trigger_type = (event_obj or {}).get("triggerable_type") or body.get("triggerable_type")
+        trigger_type_str = (event_obj or {}).get("trigger_type") or body.get("trigger_type")  # e.g. "order_invoice_created"
+        trigger_id = (event_obj or {}).get("triggerable_id") or body.get("triggerable_id")
+        is_order = (
+            trigger_id is not None
+            and (
+                str(trigger_type or "").lower() == "order"
+                or (trigger_type_str and "order" in str(trigger_type_str).lower())
+                or (trigger_type_str and "invoice" in str(trigger_type_str).lower())
+            )
+        )
+        if is_order:
             try:
-                oid = event_obj.get("triggerable_id")
-                if oid is not None:
-                    oid = int(oid)
-                    fetched = await _fetch_order_phone(oid)
-                    if fetched:
-                        data["whatsapp_number"] = fetched
-            except (TypeError, ValueError):
-                pass
+                oid = int(trigger_id)
+                logger.info("Fetching order %s from PlugAndPay API (triggerable_type=%s)", oid, trigger_type)
+                fetched = await _fetch_order_phone(oid)
+                if fetched:
+                    data["whatsapp_number"] = fetched
+                else:
+                    logger.warning("PlugAndPay API returned no phone for order %s", oid)
+            except (TypeError, ValueError) as e:
+                logger.warning("Invalid triggerable_id %s: %s", trigger_id, e)
+        elif not data.get("whatsapp_number"):
+            logger.info(
+                "Webhook has no phone. event type=%s, keys=%s",
+                type(body.get("event")).__name__ if body.get("event") is not None else "missing",
+                list(event_obj.keys()) if isinstance(event_obj, dict) else (list(body.keys()) if isinstance(body, dict) else "n/a"),
+            )
 
     raw_number = (data.get("whatsapp_number") or data.get("whatsapp") or data.get("phone") or "")[:20]
     logger.info(
