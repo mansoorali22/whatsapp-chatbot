@@ -7,6 +7,7 @@ import os
 import re
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter, Request, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,52 @@ _WEBHOOK_TOKEN_BODY_KEYS = ("webhook_token", "verify_token", "secret", "token", 
 
 # Keys that might hold a phone number in webhook payloads
 _PHONE_KEYS = ("whatsapp_number", "whatsapp", "phone", "phone_number", "mobile", "telephone")
+
+
+# PlugAndPay API (from https://github.com/plug-and-pay/sdk-php: BASE_API_URL_PRODUCTION, OrderService uses GET /v2/orders/{id})
+PLUGANDPAY_API_BASE_DEFAULT = "https://api.plugandpay.com"
+PLUGANDPAY_ORDER_PATH = "/v2/orders/{id}"
+
+
+async def _fetch_order_phone(order_id: int) -> Optional[str]:
+    """
+    Fetch order by ID from PlugAndPay API and return customer phone.
+    Uses https://api.plugandpay.com and GET /v2/orders/{id} (per plug-and-pay/sdk-php).
+    Response body has order in body["data"]; we search for phone in data and nested objects.
+    """
+    api_url = (
+        getattr(settings, "PLUG_N_PAY_API_URL", None)
+        or os.environ.get("PLUG_N_PAY_API_URL", "").strip().rstrip("/")
+        or PLUGANDPAY_API_BASE_DEFAULT
+    )
+    token = getattr(settings, "PLUG_N_PAY_TOKEN", None) or os.environ.get("PLUG_N_PAY_TOKEN")
+    if not token:
+        return None
+    path = PLUGANDPAY_ORDER_PATH.format(id=order_id)
+    url = api_url.rstrip("/") + path
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+            if r.status_code != 200:
+                logger.debug("PlugAndPay API order %s returned %s", order_id, r.status_code)
+                return None
+            data = r.json()
+            if not isinstance(data, dict):
+                return None
+            # API returns { "data": { ... order ... } } per SDK BodyToOrder::build($response->body()['data'])
+            payload = data.get("data") if isinstance(data.get("data"), dict) else data
+            phone = _find_phone_in_dict(payload)
+            if phone:
+                logger.info("Fetched order %s from PlugAndPay API; found phone", order_id)
+                return phone
+            for key in ("order", "receiver", "customer", "billing", "data"):
+                if isinstance(data.get(key), dict):
+                    phone = _find_phone_in_dict(data[key])
+                    if phone:
+                        return phone
+    except Exception as e:
+        logger.warning("PlugAndPay API fetch order %s failed: %s", order_id, e)
+    return None
 
 
 def _find_phone_in_dict(d: Any, depth: int = 0, max_depth: int = 4) -> Optional[str]:
@@ -113,13 +160,26 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
     if not isinstance(event_type, str):
         event_type = "payment_received"
 
-    data = body.get("data") or body
+    # Payload may have data at body.data or everything inside body.event (PlugAndPay: event, rule_id, sent_at, tenant_id)
+    event_obj = body.get("event") if isinstance(body.get("event"), dict) else None
+    data = body.get("data") or (event_obj or body)
     if not isinstance(data, dict):
         data = {}
 
-    # PlugAndPay may send order/customer at top level or under data
-    order = data.get("order") or body.get("order") or {}
-    customer = data.get("customer") or body.get("customer") or body.get("billing_details") or {}
+    # PlugAndPay may send order/customer at top level, under data, or inside event
+    order = (
+        data.get("order")
+        or body.get("order")
+        or (event_obj.get("order") if event_obj else None)
+        or {}
+    )
+    customer = (
+        data.get("customer")
+        or body.get("customer")
+        or body.get("billing_details")
+        or (event_obj.get("customer") if event_obj else None)
+        or {}
+    )
     if not isinstance(order, dict):
         order = {}
     if not isinstance(customer, dict):
@@ -246,6 +306,21 @@ async def plugnpay_webhook(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     event_type, data = _extract_event_and_data(body)
+
+    # When webhook has no phone but has order reference (event.triggerable_id), try to fetch order from API
+    if not data.get("whatsapp_number"):
+        event_obj = body.get("event") if isinstance(body.get("event"), dict) else None
+        if event_obj and event_obj.get("triggerable_type") == "order":
+            try:
+                oid = event_obj.get("triggerable_id")
+                if oid is not None:
+                    oid = int(oid)
+                    fetched = await _fetch_order_phone(oid)
+                    if fetched:
+                        data["whatsapp_number"] = fetched
+            except (TypeError, ValueError):
+                pass
+
     raw_number = (data.get("whatsapp_number") or data.get("whatsapp") or data.get("phone") or "")[:20]
     logger.info(
         "Plug&Pay webhook received: type=%s whatsapp=%s credits=%s",
@@ -256,7 +331,8 @@ async def plugnpay_webhook(
 
     if not data.get("whatsapp_number"):
         logger.warning(
-            "Webhook payload missing whatsapp_number; cannot link to subscription. Top-level keys: %s",
+            "Webhook payload missing whatsapp_number; cannot link to subscription. "
+            "Top-level keys: %s. Add phone/custom field in PlugAndPay checkout or set PLUG_N_PAY_API_URL to fetch order by ID.",
             list(body.keys()) if isinstance(body, dict) else "n/a",
         )
         return {"status": "ignored", "reason": "missing_whatsapp_number"}
