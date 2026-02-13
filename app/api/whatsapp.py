@@ -43,14 +43,15 @@ async def send_whatsapp_message(to: str, message_text: str):
 # -------------------------------
 # BACKGROUND TASK: RAG RESPONSE
 # -------------------------------
-async def handle_rag_and_reply(sender: str, text: str):
+async def handle_rag_and_reply(sender: str, text: str, is_first_message: bool = False):
     """
     Processes the RAG logic and sends a reply to the sender asynchronously.
     Uses its own DB session to avoid stale connections (e.g. after app sleep).
+    When is_first_message is True, the reply includes the welcome intro for new users.
     """
     db = SessionLocal()
     try:
-        ai_answer = get_response(text, sender, db)
+        ai_answer = get_response(text, sender, db, is_first_message=is_first_message)
         await send_whatsapp_message(sender, ai_answer)
     finally:
         db.close()
@@ -108,7 +109,8 @@ def _process_webhook_messages(body: dict, db: Session, background_tasks: Backgro
                 db.commit()
             subscription.message_count += 1
             db.commit()
-            background_tasks.add_task(handle_rag_and_reply, sender, text)
+            is_first_message = db.query(ChatLog).filter(ChatLog.whatsapp_number == sender).count() == 0
+            background_tasks.add_task(handle_rag_and_reply, sender, text, is_first_message)
             logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
 
 

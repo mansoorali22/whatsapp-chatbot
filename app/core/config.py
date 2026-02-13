@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     # Plug & Pay
     # -------------------
     PLUG_N_PAY_TOKEN: Optional[str] = Field(default=None, alias="PLUG_N_PAY_TOKEN")
+    # API token for fetching order by ID (may differ from webhook token). Generate in PlugAndPay admin.
+    PLUG_N_PAY_API_TOKEN: Optional[str] = Field(default=None, alias="PLUG_N_PAY_API_TOKEN")
     # Set to "1" or "true" if PlugAndPay does not send a webhook token (they may not support it)
     PLUG_N_PAY_SKIP_VERIFY: bool = False
     # Optional: base URL to fetch order by ID when webhook has no phone (e.g. https://api.plugandpay.com)

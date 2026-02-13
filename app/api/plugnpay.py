@@ -49,9 +49,15 @@ async def _fetch_order_phone(order_id: int) -> Optional[str]:
         or os.environ.get("PLUG_N_PAY_API_URL", "").strip().rstrip("/")
         or PLUGANDPAY_API_BASE_DEFAULT
     )
-    token = getattr(settings, "PLUG_N_PAY_TOKEN", None) or os.environ.get("PLUG_N_PAY_TOKEN")
+    # Use API token if set (from admin); else fall back to webhook token (401 = need API token from PlugAndPay admin)
+    token = (
+        getattr(settings, "PLUG_N_PAY_API_TOKEN", None)
+        or os.environ.get("PLUG_N_PAY_API_TOKEN", "").strip()
+        or getattr(settings, "PLUG_N_PAY_TOKEN", None)
+        or os.environ.get("PLUG_N_PAY_TOKEN")
+    )
     if not token:
-        logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_TOKEN not set on Render")
+        logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_API_TOKEN or PLUG_N_PAY_TOKEN not set on Render")
         return None
     path = PLUGANDPAY_ORDER_PATH.format(id=order_id)
     url = api_url.rstrip("/") + path

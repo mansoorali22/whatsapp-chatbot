@@ -1,3 +1,4 @@
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from sqlalchemy.exc import OperationalError
@@ -10,6 +11,12 @@ from langchain_core.output_parsers import StrOutputParser
 
 from app.core.config import settings
 from app.db.models import ChatLog
+
+# Welcome message for new users (Dutch)
+WELCOME_INTRO_NL = (
+    "Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
+    "Verwacht praktische tips, evidence-based advies en ideeën die je meteen kunt toepassen in je keuken en sport voorbereiding!"
+)
 
 # Out-of-context reply (bilingual)
 REFUSAL_MESSAGE = (
@@ -53,6 +60,40 @@ def _strip_refusal_from_answer(answer: str) -> str:
             elif out.endswith("()"):
                 out = out[:-2].strip()
     return out if out else answer
+
+
+def _use_dutch_page_word(user_message: str) -> bool:
+    """True if we should use 'pagina' instead of 'page' in citations (user writes in Dutch or config is Dutch)."""
+    if not user_message or not user_message.strip():
+        return False
+    lang = getattr(settings, "DEFAULT_LANGUAGE", "") or ""
+    if "dutch" in lang.lower() or lang.lower() == "nl":
+        return True
+    msg = user_message.lower().strip()
+    dutch_cues = [
+        "pagina", "welke", "waar", "bladzijde", "vind", "staat", "recept", "het boek",
+        "een vraag", "van de", "op welke", "welke pagina", "kunt u", "kun je",
+        "graag", "alsjeblieft", "dank", "bedankt", "hoeveel", "waarom", "wanneer",
+    ]
+    return any(c in msg for c in dutch_cues)
+
+
+def _localize_page_citations(user_message: str, answer: str) -> str:
+    """Replace English 'page N' with Dutch 'pagina N' when the user is writing in Dutch."""
+    if not answer or not _use_dutch_page_word(user_message):
+        return answer
+    # "page 196" / "page 197" -> "pagina 196" / "pagina 197"
+    answer = re.sub(r"\bpage\s+(\d+)", r"pagina \1", answer, flags=re.IGNORECASE)
+    # "pages 1-5" / "pages 196, 197" -> "pagina's"
+    answer = re.sub(r"\bpages\s+", "pagina's ", answer, flags=re.IGNORECASE)
+    return answer
+
+
+def _prepend_welcome_if_first(reply: str, is_first_message: bool) -> str:
+    """Prepend the Dutch welcome intro when this is the user's first message."""
+    if not is_first_message or not reply:
+        return WELCOME_INTRO_NL if (is_first_message and not reply) else reply
+    return WELCOME_INTRO_NL + "\n\n" + reply
 
 
 def _is_refusal_response(answer: str) -> str:
@@ -147,7 +188,7 @@ def init_rag_components():
                 "RULES: 1) Answer ONLY from the excerpts. 2) Answer in the SAME LANGUAGE as the user (Dutch or English). "
                 "3) If excerpts contain relevant info (even partial), you MUST answer fully: summarize the actual content (e.g. what an ideal daily menu looks like—meals, examples, timing). Give the substance from the excerpts so the user gets a complete answer. "
                 "4) NEVER mention page numbers, 'page N', 'see page', or 'pagina' in your answer UNLESS the user explicitly asked for them (e.g. 'on which page?', 'waar vind ik dat?', 'welke bladzijde?', 'where can I find that?'). If they did NOT ask for a page, do not add any page reference—just give the content. "
-                "5) ONLY when the user explicitly asks where to find something (page/bladzijde/waar vind ik), give the page numbers from the excerpt labels. Use format 'page N' (e.g. 'page 179, page 186') consistently. Same topic = same page numbers in Dutch or English. NEVER say I don't know for this; it is in scope. "
+                "5) ONLY when the user explicitly asks where to find something (page/bladzijde/waar vind ik), give the page numbers from the excerpt labels. If the user wrote in Dutch, use 'pagina N' (e.g. 'pagina 179, pagina 186'). If in English, use 'page N'. Same topic = same page numbers. NEVER say I don't know for this; it is in scope. "
                 "6) ONLY when excerpts have NOTHING relevant to the question, reply with exactly: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\" then \"Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!\". Never mix: if you have relevant content, answer only that; if none, use only this refusal. "
             ),
             ("system", "Context excerpts:\n{context}"),
@@ -164,21 +205,23 @@ def init_rag_components():
 # -----------------------------
 # GET RESPONSE
 # -----------------------------
-def get_response(user_input: str, whatsapp_number: str, db: Session):
+def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_message: bool = False):
     if not all([llm, retriever, intent_chain, rewrite_chain, answer_chain]):
         init_rag_components()
 
     # 1. Intent check
     intent = intent_chain.invoke({"input": user_input}).strip().upper()
     if "GREETING" in intent:
-        return (
+        reply = (
             "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. "
             "Ik beantwoord vragen alleen op basis van het boek. "
             "Stel gerust een vraag over voeding, training of recepten. "
             "Hi! I'm the Eat like an Athlete assistant. I answer only from the book. Ask me anything about nutrition, training or recipes."
         )
+        return _prepend_welcome_if_first(reply, is_first_message)
     if "THANKS" in intent:
-        return "You're welcome! Ask me anything else about the book. Graag gedaan! Stel gerust nog een vraag over het boek."
+        reply = "You're welcome! Ask me anything else about the book. Graag gedaan! Stel gerust nog een vraag over het boek."
+        return _prepend_welcome_if_first(reply, is_first_message)
 
     # 2. Load chat history
     past_logs = (
@@ -219,6 +262,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
             except Exception as retry_e:
                 print(f"❌ Retry failed: {retry_e}")
                 answer = REFUSAL_MESSAGE
+                answer = _prepend_welcome_if_first(answer, is_first_message)
                 db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", chunks_used=[], history_snapshot=[]))
                 db.commit()
                 return answer
@@ -267,6 +311,8 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
 
         # If model wrongly appended refusal despite having relevant excerpts, strip it and keep the useful part
         answer = _strip_refusal_from_answer(answer)
+        # Use Dutch 'pagina' instead of 'page' when user wrote in Dutch
+        answer = _localize_page_citations(user_input, answer)
 
         # Only treat as refused if answer is essentially the refusal (no substantive content)
         response_type = _is_refusal_response(answer)
@@ -311,4 +357,4 @@ def get_response(user_input: str, whatsapp_number: str, db: Session):
         )
         db.commit()
 
-    return answer
+    return _prepend_welcome_if_first(answer, is_first_message)
