@@ -93,7 +93,16 @@ class Settings(BaseSettings):
     DEFAULT_LANGUAGE: str = "English"
     # Total pages in the book (for ingest: assigns estimated page numbers to chunks so answers can cite "page N")
     BOOK_TOTAL_PAGES: int = 250
-    
+
+    # -------------------
+    # Trial & plans
+    # -------------------
+    TRIAL_DAYS: int = 7
+    TRIAL_MAX_QUESTIONS: int = 15
+    TRIAL_CREDITS: int = 15
+    TRIAL_WARNING_MESSAGE_NL: str = "Je free trial eindigt bijna omdat je het maximaal aantal vragen hebt gesteld. Je Buddy helpt je graag verder. Upgrade voor onbeperkte ondersteuning."
+    UPGRADE_REQUIRED_MESSAGE_NL: str = "Je trial is afgelopen of je hebt geen credits meer. Upgrade voor onbeperkte ondersteuning."
+
     # -------------------
     # Pydantic Config
     # -------------------

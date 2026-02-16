@@ -1,10 +1,15 @@
 """
 Payment and subscription logic for Plug & Pay webhook events.
 All operations use the Subscription table; no external API calls.
+
+Plans:
+- Subscription monthly (no carryover): Start=75, Active=150, Pro=300 credits/month
+- Pre-paid: 50 or 100 credits (add to balance)
+- Trial: 7 days, max 15 questions (TRIAL_CREDITS=15); at question 8 send warning.
 """
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Optional, Any, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +18,27 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Plan name (lowercase/substring) -> (credits, is_monthly_subscription)
+# Monthly: credits replaced each period (no carryover). Pre-paid: credits added.
+PLAN_CREDITS = {
+    "start": (75, True),
+    "active": (150, True),
+    "pro": (300, True),
+    "50": (50, False),
+    "100": (100, False),
+}
+
+
+def _plan_credits_from_name(plan_name: Optional[str]) -> Tuple[Optional[int], bool]:
+    """Return (credits, is_monthly) for plan_name, or (None, False) if no match."""
+    if not plan_name:
+        return None, False
+    name = plan_name.lower().strip()
+    for key, (credits, is_monthly) in PLAN_CREDITS.items():
+        if key in name:
+            return credits, is_monthly
+    return None, False
+
 
 # ---------------------------------------------------------------------------
 # Subscription verification (for WhatsApp handler)
@@ -20,8 +46,8 @@ logger = logging.getLogger(__name__)
 
 def verify_subscription(whatsapp_number: str, db: Session) -> bool:
     """
-    Returns True if the user has an active subscription and credits.
-    Used before processing a message in the WhatsApp handler.
+    Returns True if the user can ask a question (active subscription, has credits, within trial if trial).
+    Trial: allowed only if within 7 days (subscription_end), message_count < TRIAL_MAX_QUESTIONS, and credits >= 1.
     """
     sub = db.query(Subscription).filter(
         Subscription.whatsapp_number == whatsapp_number
@@ -30,10 +56,15 @@ def verify_subscription(whatsapp_number: str, db: Session) -> bool:
         return False
     if sub.status != "active":
         return False
-    if sub.credits is not None and sub.credits < 1:
+    now = datetime.now(timezone.utc)
+    if sub.subscription_end and sub.subscription_end < now:
         return False
-    if sub.subscription_end and sub.subscription_end < datetime.now(timezone.utc):
+    if sub.credits is None or sub.credits < 1:
         return False
+    if sub.is_trial:
+        max_q = getattr(settings, "TRIAL_MAX_QUESTIONS", 15)
+        if (sub.message_count or 0) >= max_q:
+            return False
     return True
 
 
@@ -125,11 +156,16 @@ def handle_subscription_created(
 ) -> Subscription:
     """
     Create or update subscription on 'subscription_created' / 'payment_received'.
-    If record exists, update it; otherwise create.
+    Monthly plans (Start/Active/Pro): set credits to plan amount (no carryover).
+    Pre-paid (50/100): add credits to balance.
     """
     number = normalize_whatsapp_number(whatsapp_number)
     if not number:
         raise ValueError("whatsapp_number is required and must be non-empty")
+
+    plan_credits, is_monthly = _plan_credits_from_name(plan_name)
+    if credits is None and plan_credits is not None:
+        credits = plan_credits
 
     sub = get_subscription(number, db)
     now = datetime.now(timezone.utc)
@@ -139,16 +175,19 @@ def handle_subscription_created(
         sub.plan_name = plan_name or sub.plan_name
         sub.plugnpay_customer_id = plugnpay_customer_id or sub.plugnpay_customer_id
         if credits is not None:
-            sub.credits = (sub.credits or 0) + credits
-            sub.total_purchased = (sub.total_purchased or 0) + credits
-        sub.is_recurring = is_recurring
+            if is_monthly:
+                sub.credits = credits  # Monthly: replace (no carryover)
+            else:
+                sub.credits = (sub.credits or 0) + credits
+                sub.total_purchased = (sub.total_purchased or 0) + credits
+        sub.is_recurring = is_recurring or is_monthly
         sub.is_trial = False
         sub.subscription_start = sub.subscription_start or now
         sub.subscription_end = subscription_end or sub.subscription_end
         sub.updated_at = now
         db.commit()
         db.refresh(sub)
-        logger.info(f"Subscription updated for {number}, plan={plan_name}, credits+= {credits}")
+        logger.info(f"Subscription updated for {number}, plan={plan_name}, credits={'set' if is_monthly else '+'}={credits}")
         return sub
 
     sub = Subscription(
@@ -159,7 +198,7 @@ def handle_subscription_created(
         credits=credits if credits is not None else 15,
         total_purchased=credits if credits is not None else 0,
         is_trial=False,
-        is_recurring=is_recurring,
+        is_recurring=is_recurring or is_monthly,
         subscription_start=now,
         subscription_end=subscription_end,
     )
@@ -180,7 +219,7 @@ def handle_subscription_updated(
     is_recurring: Optional[bool] = None,
     subscription_end: Optional[datetime] = None,
 ) -> Optional[Subscription]:
-    """Update existing subscription (plan change, renewal, etc.)."""
+    """Update existing subscription (plan change, renewal). Monthly: set credits (no carryover); pre-paid: add credits."""
     number = normalize_whatsapp_number(whatsapp_number)
     if not number:
         return None
@@ -190,13 +229,20 @@ def handle_subscription_updated(
         logger.warning(f"Subscription update for unknown number: {number}")
         return None
 
+    plan_credits, is_monthly = _plan_credits_from_name(plan_name or sub.plan_name)
+    if credits is None and plan_credits is not None:
+        credits = plan_credits
+
     if plan_name is not None:
         sub.plan_name = plan_name
     if status is not None:
         sub.status = status
     if credits is not None:
-        sub.credits = (sub.credits or 0) + credits
-        sub.total_purchased = (sub.total_purchased or 0) + credits
+        if is_monthly:
+            sub.credits = credits
+        else:
+            sub.credits = (sub.credits or 0) + credits
+            sub.total_purchased = (sub.total_purchased or 0) + credits
     if is_recurring is not None:
         sub.is_recurring = is_recurring
     if subscription_end is not None:
@@ -205,7 +251,7 @@ def handle_subscription_updated(
     sub.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(sub)
-    logger.info(f"Subscription updated for {number}")
+    logger.info(f"Subscription updated for {number}, credits={'set' if is_monthly else '+'}={credits}")
     return sub
 
 
@@ -257,7 +303,7 @@ def process_webhook_event(event_type: str, data: dict, db: Session) -> bool:
             sub_end = None
 
     try:
-        if event_lower in ("subscription_created", "subscription.created", "payment_received", "payment.received", "new_simple_sale"):
+        if event_lower in ("subscription_created", "subscription.created", "payment_received", "payment.received", "new_simple_sale", "order_invoice_created"):
             handle_subscription_created(
                 number,
                 db,

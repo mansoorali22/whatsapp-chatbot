@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Request, Response, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
@@ -6,7 +7,8 @@ import httpx
 
 from app.db.connection import get_db, SessionLocal
 from app.core.config import settings
-from app.services.rag import get_response  # Your RAG logic
+from app.services.rag import get_response
+from app.services.payment_logic import verify_subscription, deduct_credit, get_subscription
 from app.db.models import Subscription, ChatLog, ProcessedMessage
 
 router = APIRouter()
@@ -45,14 +47,21 @@ async def send_whatsapp_message(to: str, message_text: str):
 # -------------------------------
 async def handle_rag_and_reply(sender: str, text: str, is_first_message: bool = False):
     """
-    Processes the RAG logic and sends a reply to the sender asynchronously.
-    Uses its own DB session to avoid stale connections (e.g. after app sleep).
-    When is_first_message is True, the reply includes the welcome intro for new users.
+    Verifies subscription/credits, runs RAG, sends reply. Deducts one credit after answering.
+    Trial: at 8th question (message_count==7 before deduct) appends trial warning to the answer.
     """
     db = SessionLocal()
     try:
+        if not verify_subscription(sender, db):
+            await send_whatsapp_message(sender, settings.UPGRADE_REQUIRED_MESSAGE_NL)
+            return
+        sub = get_subscription(sender, db)
+        show_trial_warning = sub and sub.is_trial and (sub.message_count or 0) == 7
         ai_answer = get_response(text, sender, db, is_first_message=is_first_message)
+        if show_trial_warning:
+            ai_answer = (ai_answer or "") + "\n\n" + settings.TRIAL_WARNING_MESSAGE_NL
         await send_whatsapp_message(sender, ai_answer)
+        deduct_credit(sender, db)
     finally:
         db.close()
 
@@ -99,16 +108,20 @@ def _process_webhook_messages(body: dict, db: Session, background_tasks: Backgro
             db.add(ProcessedMessage(message_id=message_id))
             subscription = db.query(Subscription).filter_by(whatsapp_number=sender).first()
             if not subscription:
+                now = datetime.now(timezone.utc)
+                trial_days = getattr(settings, "TRIAL_DAYS", 7)
+                trial_credits = getattr(settings, "TRIAL_CREDITS", 15)
                 subscription = Subscription(
                     whatsapp_number=sender,
                     status="active",
-                    plan_name="Default Plan",
-                    is_trial=True
+                    plan_name="Trial",
+                    is_trial=True,
+                    credits=trial_credits,
+                    subscription_start=now,
+                    subscription_end=now + timedelta(days=trial_days),
                 )
                 db.add(subscription)
                 db.commit()
-            subscription.message_count += 1
-            db.commit()
             is_first_message = db.query(ChatLog).filter(ChatLog.whatsapp_number == sender).count() == 0
             background_tasks.add_task(handle_rag_and_reply, sender, text, is_first_message)
             logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
