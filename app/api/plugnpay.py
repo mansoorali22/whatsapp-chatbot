@@ -63,8 +63,9 @@ async def _fetch_order_phone(order_id: int) -> Optional[str]:
     if not token:
         logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_API_TOKEN or PLUG_N_PAY_TOKEN not set on Render")
         return None
+    # Request billing so we get contact.telephone (per plug-and-pay/sdk-php: OrderIncludes.BILLING, Contact has telephone)
     path = PLUGANDPAY_ORDER_PATH.format(id=order_id)
-    url = api_url.rstrip("/") + path
+    url = api_url.rstrip("/") + path + "?include=billing"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
