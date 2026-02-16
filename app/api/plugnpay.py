@@ -29,8 +29,12 @@ _WEBHOOK_TOKEN_HEADERS = (
 )
 _WEBHOOK_TOKEN_BODY_KEYS = ("webhook_token", "verify_token", "secret", "token", "webhook_secret")
 
-# Keys that might hold a phone number in webhook payloads
-_PHONE_KEYS = ("whatsapp_number", "whatsapp", "phone", "phone_number", "mobile", "telephone")
+# Keys that might hold a phone number in webhook/order payloads
+_PHONE_KEYS = (
+    "whatsapp_number", "whatsapp", "phone", "phone_number", "mobile", "telephone",
+    "telefoon", "contact_phone", "shipping_phone", "receiver_phone", "billing_phone",
+    "contact_number", "gsm",
+)
 
 
 # PlugAndPay API (from https://github.com/plug-and-pay/sdk-php: BASE_API_URL_PRODUCTION, OrderService uses GET /v2/orders/{id})
@@ -81,7 +85,15 @@ async def _fetch_order_phone(order_id: int) -> Optional[str]:
                     phone = _find_phone_in_dict(data[key])
                     if phone:
                         return phone
-            logger.warning("PlugAndPay API order %s: response 200 but no phone field in JSON (top-level keys: %s)", order_id, list(data.keys()) if isinstance(data, dict) else "n/a")
+            try:
+                hint = _structure_hint(payload)
+                logger.warning(
+                    "PlugAndPay API order %s: response 200 but no phone in JSON. Structure hint (keys only): %s",
+                    order_id,
+                    hint,
+                )
+            except Exception:
+                logger.warning("PlugAndPay API order %s: response 200 but no phone (top-level keys: %s)", order_id, list(data.keys()) if isinstance(data, dict) else "n/a")
     except Exception as e:
         logger.warning("PlugAndPay API fetch order %s failed: %s", order_id, e)
     return None
@@ -100,6 +112,12 @@ def _find_phone_in_dict(d: Any, depth: int = 0, max_depth: int = 4) -> Optional[
             if len(digits) >= 8:
                 return val.strip()
         if isinstance(val, dict):
+            # e.g. {"number": "316...", "country_code": "31"}
+            for sub in ("number", "value", "phone", "national"):
+                if isinstance(val.get(sub), str):
+                    s = val.get(sub, "").strip()
+                    if len("".join(c for c in s if c.isdigit())) >= 8:
+                        return s
             found = _find_phone_in_dict(val, depth + 1, max_depth)
             if found:
                 return found
@@ -108,7 +126,24 @@ def _find_phone_in_dict(d: Any, depth: int = 0, max_depth: int = 4) -> Optional[
             found = _find_phone_in_dict(v, depth + 1, max_depth)
             if found:
                 return found
+        if isinstance(v, list):
+            for item in v[:5]:  # limit scan
+                if isinstance(item, dict):
+                    found = _find_phone_in_dict(item, depth + 1, max_depth)
+                    if found:
+                        return found
     return None
+
+
+def _structure_hint(obj: Any, depth: int = 0, max_depth: int = 2) -> Any:
+    """Return a small structure hint (keys only, no values) for logging."""
+    if depth > max_depth:
+        return "..."
+    if isinstance(obj, dict):
+        return {k: _structure_hint(v, depth + 1, max_depth) for k, v in list(obj.items())[:15]}
+    if isinstance(obj, list):
+        return [_structure_hint(obj[0], depth + 1, max_depth)] if obj else []
+    return type(obj).__name__
 
 
 def _verify_webhook_token(request: Request, body: dict) -> bool:
