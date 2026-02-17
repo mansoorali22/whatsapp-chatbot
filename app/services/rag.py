@@ -74,6 +74,8 @@ def _use_dutch_page_word(user_message: str) -> bool:
         "pagina", "welke", "waar", "bladzijde", "vind", "staat", "recept", "het boek",
         "een vraag", "van de", "op welke", "welke pagina", "kunt u", "kun je",
         "graag", "alsjeblieft", "dank", "bedankt", "hoeveel", "waarom", "wanneer",
+        "hoi", "halloo", "hallo", "hoe ", "hoe werkt", "wie ben", "vertellen", "mij ",
+        "jij ", "dit ", "werkt", "gedaan", "dankjewel", "dank je",
     ]
     return any(c in msg for c in dutch_cues)
 
@@ -212,14 +214,24 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
     # 1. Intent check
     intent = intent_chain.invoke({"input": user_input}).strip().upper()
     if "GREETING" in intent:
-        reply = (
-            "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. "
-            "Ik beantwoord vragen alleen op basis van het boek. "
-            "Stel gerust een vraag over voeding, training of recepten."
-        )
+        if _use_dutch_page_word(user_input):
+            reply = (
+                "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. "
+                "Ik beantwoord vragen alleen op basis van het boek. "
+                "Stel gerust een vraag over voeding, training of recepten."
+            )
+        else:
+            reply = (
+                "Hi! 👋 I'm the Eat like an Athlete assistant. "
+                "I answer questions only from the book. "
+                "Ask me anything about nutrition, training or recipes."
+            )
         return _prepend_welcome_if_first(reply, is_first_message)
     if "THANKS" in intent:
-        reply = "Graag gedaan! Stel gerust nog een vraag over het boek."
+        if _use_dutch_page_word(user_input):
+            reply = "Graag gedaan! Stel gerust nog een vraag over het boek."
+        else:
+            reply = "You're welcome! Ask me anything else about the book."
         return _prepend_welcome_if_first(reply, is_first_message)
 
     # 2. Load chat history
