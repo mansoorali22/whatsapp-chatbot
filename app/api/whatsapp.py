@@ -56,7 +56,8 @@ async def handle_rag_and_reply(sender: str, text: str, is_first_message: bool = 
             await send_whatsapp_message(sender, settings.UPGRADE_REQUIRED_MESSAGE_NL)
             return
         sub = get_subscription(sender, db)
-        show_trial_warning = sub and sub.is_trial and (sub.message_count or 0) == 7
+        warning_at = getattr(settings, "TRIAL_WARNING_AT_QUESTION", 7)
+        show_trial_warning = sub and sub.is_trial and (sub.message_count or 0) == (warning_at - 1)
         ai_answer = get_response(text, sender, db, is_first_message=is_first_message)
         if show_trial_warning:
             ai_answer = (ai_answer or "") + "\n\n" + settings.TRIAL_WARNING_MESSAGE_NL

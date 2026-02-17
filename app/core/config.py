@@ -98,10 +98,20 @@ class Settings(BaseSettings):
     # Trial & plans
     # -------------------
     TRIAL_DAYS: int = 7
-    TRIAL_MAX_QUESTIONS: int = 15
-    TRIAL_CREDITS: int = 15
-    TRIAL_WARNING_MESSAGE_NL: str = "Je free trial eindigt bijna omdat je het maximaal aantal vragen hebt gesteld. Je Buddy helpt je graag verder. Upgrade voor onbeperkte ondersteuning."
-    UPGRADE_REQUIRED_MESSAGE_NL: str = "Je trial is afgelopen of je hebt geen credits meer. Upgrade voor onbeperkte ondersteuning."
+    TRIAL_MAX_QUESTIONS: int = 10
+    TRIAL_CREDITS: int = 10
+    # Show this warning when user reaches TRIAL_WARNING_AT_QUESTION (e.g. after 6 questions, on 7th answer)
+    TRIAL_WARNING_AT_QUESTION: int = 7
+    UPGRADE_LINK: str = "https://iamafoodie.nl/atleet-buddy"
+    TRIAL_WARNING_MESSAGE_NL: str = (
+        "Je free trial eindigt bijna omdat je het maximaal aantal vragen hebt gesteld. "
+        "Je Buddy helpt je graag verder. Upgrade voor onbeperkte ondersteuning. "
+        "Kies het pakket dat bij je past: https://iamafoodie.nl/atleet-buddy"
+    )
+    UPGRADE_REQUIRED_MESSAGE_NL: str = (
+        "Je trial is afgelopen of je hebt geen credits meer. "
+        "Upgrade voor onbeperkte ondersteuning: https://iamafoodie.nl/atleet-buddy"
+    )
 
     # -------------------
     # Pydantic Config

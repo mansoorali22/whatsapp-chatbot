@@ -215,12 +215,11 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         reply = (
             "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. "
             "Ik beantwoord vragen alleen op basis van het boek. "
-            "Stel gerust een vraag over voeding, training of recepten. "
-            "Hi! I'm the Eat like an Athlete assistant. I answer only from the book. Ask me anything about nutrition, training or recipes."
+            "Stel gerust een vraag over voeding, training of recepten."
         )
         return _prepend_welcome_if_first(reply, is_first_message)
     if "THANKS" in intent:
-        reply = "You're welcome! Ask me anything else about the book. Graag gedaan! Stel gerust nog een vraag over het boek."
+        reply = "Graag gedaan! Stel gerust nog een vraag over het boek."
         return _prepend_welcome_if_first(reply, is_first_message)
 
     # 2. Load chat history
