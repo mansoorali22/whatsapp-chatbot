@@ -12,17 +12,22 @@ from langchain_core.output_parsers import StrOutputParser
 from app.core.config import settings
 from app.db.models import ChatLog
 
-# Welcome message for new users (Dutch)
+# Welcome message for new users (first message only)
 WELCOME_INTRO_NL = (
     "Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
     "Verwacht praktische tips, evidence-based advies en ideeën die je meteen kunt toepassen in je keuken en sport voorbereiding!"
 )
-
-# Out-of-context reply (bilingual)
-REFUSAL_MESSAGE = (
-    "Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\n\n"
-    "Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!"
+WELCOME_INTRO_EN = (
+    "I'm happy to answer your questions about sports nutrition, recovery, healthy eating and recipe inspiration. "
+    "Expect practical tips, evidence-based advice and ideas you can use straight away in your kitchen and training."
 )
+
+# Out-of-context reply (language-aware: NL, EN, or both only when user mixes languages)
+REFUSAL_MESSAGE_NL = "Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!"
+REFUSAL_MESSAGE_EN = "Unfortunately, I can't help you with this question. However, I'm happy to help with questions about sports nutrition!"
+REFUSAL_MESSAGE = (
+    REFUSAL_MESSAGE_EN + "\n\n" + REFUSAL_MESSAGE_NL
+)  # fallback bilingual
 
 
 def _strip_refusal_from_answer(answer: str) -> str:
@@ -80,6 +85,30 @@ def _use_dutch_page_word(user_message: str) -> bool:
     return any(c in msg for c in dutch_cues)
 
 
+def _has_english_cues(user_message: str) -> bool:
+    """True if the message clearly contains English (for welcome/refusal language choice)."""
+    if not user_message or not user_message.strip():
+        return False
+    msg = user_message.lower().strip()
+    english_cues = [
+        "hello", "hi ", "hey", "what", "which", "where", "how", "when", "why",
+        "can you", "could you", "tell me", "common", "mistake", "athletes", "training",
+        "thank", "thanks", "please", "help", "book", "nutrition", "recipe", "recipes",
+    ]
+    return any(c in msg for c in english_cues)
+
+
+def _refusal_for_language(user_input: str) -> str:
+    """Return refusal message in Dutch, English, or both only when user mixes languages."""
+    dutch = _use_dutch_page_word(user_input or "")
+    english = _has_english_cues(user_input or "")
+    if dutch and not english:
+        return REFUSAL_MESSAGE_NL
+    if english and not dutch:
+        return REFUSAL_MESSAGE_EN
+    return REFUSAL_MESSAGE_EN + "\n\n" + REFUSAL_MESSAGE_NL
+
+
 def _localize_page_citations(user_message: str, answer: str) -> str:
     """Replace English 'page N' with Dutch 'pagina N' when the user is writing in Dutch."""
     if not answer or not _use_dutch_page_word(user_message):
@@ -91,11 +120,24 @@ def _localize_page_citations(user_message: str, answer: str) -> str:
     return answer
 
 
-def _prepend_welcome_if_first(reply: str, is_first_message: bool) -> str:
-    """Prepend the Dutch welcome intro when this is the user's first message."""
-    if not is_first_message or not reply:
-        return WELCOME_INTRO_NL if (is_first_message and not reply) else reply
-    return WELCOME_INTRO_NL + "\n\n" + reply
+def _prepend_welcome_if_first(reply: str, is_first_message: bool, user_input: str = "") -> str:
+    """
+    Prepend welcome intro only on the user's first message.
+    Language: Dutch only, English only, or both only when the user's message mixes both.
+    """
+    if not is_first_message:
+        return reply
+    if not reply:
+        reply = WELCOME_INTRO_NL
+    dutch = _use_dutch_page_word(user_input or "")
+    english = _has_english_cues(user_input or "")
+    if dutch and not english:
+        intro = WELCOME_INTRO_NL
+    elif english and not dutch:
+        intro = WELCOME_INTRO_EN
+    else:
+        intro = WELCOME_INTRO_EN + "\n\n" + WELCOME_INTRO_NL
+    return intro + "\n\n" + reply
 
 
 def _is_refusal_response(answer: str) -> str:
@@ -108,6 +150,8 @@ def _is_refusal_response(answer: str) -> str:
         if len(a) < 280:  # roughly the length of the bilingual refusal
             return "refused"
     if "Helaas kan ik je bij deze vraag niet helpen" in a and len(a) < 200:
+        return "refused"
+    if "Unfortunately, I can't help you with this question" in a and len(a) < 200:
         return "refused"
     # If answer contains refusal but also substantive content (e.g. section 13, page 5), treat as answered
     if "chunk" in a.lower() or "excerpt" in a.lower() or "page" in a.lower() or "section" in a.lower():
@@ -226,13 +270,19 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 "I answer questions only from the book. "
                 "Ask me anything about nutrition, training or recipes."
             )
-        return _prepend_welcome_if_first(reply, is_first_message)
+        final = _prepend_welcome_if_first(reply, is_first_message, user_input)
+        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=final, response_type="greeting", chunks_used=[], history_snapshot=[]))
+        db.commit()
+        return final
     if "THANKS" in intent:
         if _use_dutch_page_word(user_input):
             reply = "Graag gedaan! Stel gerust nog een vraag over het boek."
         else:
             reply = "You're welcome! Ask me anything else about the book."
-        return _prepend_welcome_if_first(reply, is_first_message)
+        final = _prepend_welcome_if_first(reply, is_first_message, user_input)
+        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=final, response_type="thanks", chunks_used=[], history_snapshot=[]))
+        db.commit()
+        return final
 
     # 2. Load chat history
     past_logs = (
@@ -272,8 +322,8 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 docs_with_scores = _do_retrieval()
             except Exception as retry_e:
                 print(f"❌ Retry failed: {retry_e}")
-                answer = REFUSAL_MESSAGE
-                answer = _prepend_welcome_if_first(answer, is_first_message)
+                answer = _refusal_for_language(user_input)
+                answer = _prepend_welcome_if_first(answer, is_first_message, user_input)
                 db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", chunks_used=[], history_snapshot=[]))
                 db.commit()
                 return answer
@@ -293,7 +343,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
     # 5. Answer phase
     if not relevant_docs:
-        answer = REFUSAL_MESSAGE
+        answer = _refusal_for_language(user_input)
         response_type = "refused"
         used_docs = []
     else:
@@ -368,4 +418,4 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         )
         db.commit()
 
-    return _prepend_welcome_if_first(answer, is_first_message)
+    return _prepend_welcome_if_first(answer, is_first_message, user_input)
