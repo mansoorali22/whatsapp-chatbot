@@ -7,8 +7,8 @@ import httpx
 
 from app.db.connection import get_db, SessionLocal
 from app.core.config import settings
-from app.services.rag import get_response
-from app.services.payment_logic import verify_subscription, deduct_credit, get_subscription
+from app.services.rag import get_response, _use_dutch_page_word
+from app.services.payment_logic import verify_subscription, deduct_credit, get_subscription, normalize_whatsapp_number
 from app.db.models import Subscription, ChatLog, ProcessedMessage
 
 router = APIRouter()
@@ -45,24 +45,34 @@ async def send_whatsapp_message(to: str, message_text: str):
 # -------------------------------
 # BACKGROUND TASK: RAG RESPONSE
 # -------------------------------
+def _is_dutch_message(text: str) -> bool:
+    """True if the user message is in Dutch (for picking NL/EN upgrade and trial messages)."""
+    return _use_dutch_page_word(text or "")
+
+
 async def handle_rag_and_reply(sender: str, text: str, is_first_message: bool = False):
     """
     Verifies subscription/credits, runs RAG, sends reply. Deducts one credit after answering.
-    Trial: at 8th question (message_count==7 before deduct) appends trial warning to the answer.
+    Trial: at 7th answer we send the answer first, then a separate message with the trial warning (NL or EN).
+    Upgrade required message is in Dutch or English based on user's message.
     """
     db = SessionLocal()
     try:
-        if not verify_subscription(sender, db):
-            await send_whatsapp_message(sender, settings.UPGRADE_REQUIRED_MESSAGE_NL)
+        # Use normalized number for DB so we match the same row as the payment webhook
+        sender_for_db = normalize_whatsapp_number(sender) or sender
+        if not verify_subscription(sender_for_db, db):
+            msg = settings.UPGRADE_REQUIRED_MESSAGE_NL if _is_dutch_message(text) else settings.UPGRADE_REQUIRED_MESSAGE_EN
+            await send_whatsapp_message(sender, msg)
             return
-        sub = get_subscription(sender, db)
+        sub = get_subscription(sender_for_db, db)
         warning_at = getattr(settings, "TRIAL_WARNING_AT_QUESTION", 7)
         show_trial_warning = sub and sub.is_trial and (sub.message_count or 0) == (warning_at - 1)
-        ai_answer = get_response(text, sender, db, is_first_message=is_first_message)
-        if show_trial_warning:
-            ai_answer = (ai_answer or "") + "\n\n" + settings.TRIAL_WARNING_MESSAGE_NL
+        ai_answer = get_response(text, sender_for_db, db, is_first_message=is_first_message)
         await send_whatsapp_message(sender, ai_answer)
-        deduct_credit(sender, db)
+        if show_trial_warning:
+            trial_msg = settings.TRIAL_WARNING_MESSAGE_NL if _is_dutch_message(text) else settings.TRIAL_WARNING_MESSAGE_EN
+            await send_whatsapp_message(sender, trial_msg)
+        deduct_credit(sender_for_db, db)
     finally:
         db.close()
 
@@ -107,13 +117,14 @@ def _process_webhook_messages(body: dict, db: Session, background_tasks: Backgro
             if db.query(ProcessedMessage).filter_by(message_id=message_id).first():
                 continue
             db.add(ProcessedMessage(message_id=message_id))
-            subscription = db.query(Subscription).filter_by(whatsapp_number=sender).first()
+            sender_for_db = normalize_whatsapp_number(sender) or sender
+            subscription = db.query(Subscription).filter_by(whatsapp_number=sender_for_db).first()
             if not subscription:
                 now = datetime.now(timezone.utc)
                 trial_days = getattr(settings, "TRIAL_DAYS", 7)
                 trial_credits = getattr(settings, "TRIAL_CREDITS", 15)
                 subscription = Subscription(
-                    whatsapp_number=sender,
+                    whatsapp_number=sender_for_db,
                     status="active",
                     plan_name="Trial",
                     is_trial=True,
@@ -123,7 +134,7 @@ def _process_webhook_messages(body: dict, db: Session, background_tasks: Backgro
                 )
                 db.add(subscription)
                 db.commit()
-            is_first_message = db.query(ChatLog).filter(ChatLog.whatsapp_number == sender).count() == 0
+            is_first_message = db.query(ChatLog).filter(ChatLog.whatsapp_number == sender_for_db).count() == 0
             background_tasks.add_task(handle_rag_and_reply, sender, text, is_first_message)
             logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
 

@@ -108,9 +108,18 @@ class Settings(BaseSettings):
         "Je Buddy helpt je graag verder. Upgrade voor onbeperkte ondersteuning. "
         "Kies het pakket dat bij je past: https://iamafoodie.nl/atleet-buddy"
     )
+    TRIAL_WARNING_MESSAGE_EN: str = (
+        "Your free trial is almost over because you've reached the maximum number of questions. "
+        "Your Buddy is happy to help you further. Upgrade for unlimited support. "
+        "Choose the plan that suits you: https://iamafoodie.nl/atleet-buddy"
+    )
     UPGRADE_REQUIRED_MESSAGE_NL: str = (
         "Je trial is afgelopen of je hebt geen credits meer. "
         "Upgrade voor onbeperkte ondersteuning: https://iamafoodie.nl/atleet-buddy"
+    )
+    UPGRADE_REQUIRED_MESSAGE_EN: str = (
+        "Your trial has ended or you have no credits left. "
+        "Upgrade for unlimited support: https://iamafoodie.nl/atleet-buddy"
     )
 
     # -------------------

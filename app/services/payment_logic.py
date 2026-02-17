@@ -49,9 +49,7 @@ def verify_subscription(whatsapp_number: str, db: Session) -> bool:
     Returns True if the user can ask a question (active subscription, has credits, within trial if trial).
     Trial: allowed only if within 7 days (subscription_end), message_count < TRIAL_MAX_QUESTIONS, and credits >= 1.
     """
-    sub = db.query(Subscription).filter(
-        Subscription.whatsapp_number == whatsapp_number
-    ).first()
+    sub = get_subscription(whatsapp_number, db)
     if not sub:
         return False
     if sub.status != "active":
@@ -69,12 +67,8 @@ def verify_subscription(whatsapp_number: str, db: Session) -> bool:
 
 
 def check_credits(whatsapp_number: str, db: Session) -> int:
-    """
-    Returns current credit balance for the user. Returns 0 if no subscription.
-    """
-    sub = db.query(Subscription).filter(
-        Subscription.whatsapp_number == whatsapp_number
-    ).first()
+    """Returns current credit balance for the user. Returns 0 if no subscription."""
+    sub = get_subscription(whatsapp_number, db)
     if not sub:
         return 0
     return sub.credits if sub.credits is not None else 0
@@ -85,9 +79,7 @@ def deduct_credit(whatsapp_number: str, db: Session) -> bool:
     Deducts one credit after a message is answered.
     Returns True if deduction succeeded, False if no credits or no subscription.
     """
-    sub = db.query(Subscription).filter(
-        Subscription.whatsapp_number == whatsapp_number
-    ).first()
+    sub = get_subscription(whatsapp_number, db)
     if not sub:
         return False
     if sub.credits is None or sub.credits < 1:
@@ -100,10 +92,18 @@ def deduct_credit(whatsapp_number: str, db: Session) -> bool:
 
 
 def get_subscription(whatsapp_number: str, db: Session) -> Optional[Subscription]:
-    """Get subscription row by WhatsApp number (E.164)."""
-    return db.query(Subscription).filter(
-        Subscription.whatsapp_number == whatsapp_number
-    ).first()
+    """
+    Get subscription row by WhatsApp number (E.164).
+    Tries normalized form first; if not found and number has leading +, tries digits-only,
+    so webhook (e.g. +316...) finds the same row as WhatsApp (316...).
+    """
+    number = normalize_whatsapp_number(whatsapp_number) or whatsapp_number
+    sub = db.query(Subscription).filter(Subscription.whatsapp_number == number).first()
+    if sub:
+        return sub
+    if number.startswith("+"):
+        sub = db.query(Subscription).filter(Subscription.whatsapp_number == number[1:]).first()
+    return sub
 
 
 # ---------------------------------------------------------------------------
