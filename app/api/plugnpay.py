@@ -2,6 +2,7 @@
 Plug & Pay webhook endpoint.
 Receives payment/subscription events and updates the Subscription table via payment_logic.
 """
+import json
 import logging
 import os
 import re
@@ -86,7 +87,7 @@ async def _fetch_order_details(order_id: int) -> dict:
             if phone:
                 out["whatsapp_number"] = phone
                 logger.info("Fetched order %s from PlugAndPay API; found phone", order_id)
-            # Plan name and credits from order: try multiple response shapes
+            # Plan name and credits from order: try products, order_lines, then meta
             order = payload if isinstance(payload, dict) else {}
             order = order.get("order") or data.get("order") or order
             if not isinstance(order, dict):
@@ -97,13 +98,15 @@ async def _fetch_order_details(order_id: int) -> dict:
                 or order.get("line_items")
                 or data.get("products")
                 or data.get("items")
+                or payload.get("order_lines")
+                or data.get("order_lines")
                 or []
             )
             if isinstance(products, dict):
                 products = list(products.values()) if products else []
             if not products and isinstance(payload, dict):
-                for key in ("products", "items", "line_items"):
-                    val = payload.get(key)
+                for key in ("products", "items", "line_items", "order_lines"):
+                    val = payload.get(key) or data.get(key)
                     if isinstance(val, list) and val:
                         products = val
                         break
@@ -133,6 +136,38 @@ async def _fetch_order_details(order_id: int) -> dict:
                     m = re.search(r"credits[-_]?(\d+)|(\d+)\s*credits", out["plan_name"], re.I)
                     if m:
                         out["credits"] = int(m.group(1) or m.group(2))
+            # Try meta (PlugAndPay order often has meta with product/plan info)
+            if (not out.get("plan_name") or out.get("credits") is None) and isinstance(payload, dict):
+                meta = payload.get("meta") or order.get("meta")
+                if isinstance(meta, dict):
+                    plan_name = meta.get("plan_name") or meta.get("product_name") or meta.get("plan") or meta.get("product") or ""
+                    if isinstance(plan_name, str) and plan_name.strip():
+                        out["plan_name"] = plan_name.strip()
+                    cred = meta.get("credits")
+                    if cred is not None and out.get("credits") is None:
+                        try:
+                            out["credits"] = int(cred)
+                        except (TypeError, ValueError):
+                            pass
+                    if out.get("credits") is None and out.get("plan_name"):
+                        m = re.search(r"credits[-_]?(\d+)|(\d+)\s*credits", str(out["plan_name"]), re.I)
+                        if m:
+                            out["credits"] = int(m.group(1) or m.group(2))
+                elif isinstance(meta, str):
+                    try:
+                        meta_obj = json.loads(meta)
+                        if isinstance(meta_obj, dict):
+                            plan_name = meta_obj.get("plan_name") or meta_obj.get("product_name") or meta_obj.get("plan") or ""
+                            if plan_name:
+                                out["plan_name"] = str(plan_name).strip()
+                            cred = meta_obj.get("credits")
+                            if cred is not None and out.get("credits") is None:
+                                try:
+                                    out["credits"] = int(cred)
+                                except (TypeError, ValueError):
+                                    pass
+                    except Exception:
+                        pass
             if not out.get("plan_name") or out.get("credits") is None:
                 logger.info(
                     "Order %s: plan_name=%s credits=%s (top keys: %s)",

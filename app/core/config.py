@@ -121,6 +121,8 @@ class Settings(BaseSettings):
         "Your trial has ended or you have no credits left. "
         "Upgrade for unlimited support: https://iamafoodie.nl/atleet-buddy"
     )
+    # When order API returns no plan/credits, grant this many credits so payment still unlocks the user
+    DEFAULT_PAYMENT_CREDITS: int = 50
 
     # -------------------
     # Pydantic Config

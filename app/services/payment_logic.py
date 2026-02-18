@@ -181,6 +181,9 @@ def handle_subscription_created(
     plan_credits, is_monthly = _plan_credits_from_name(plan_name)
     if credits is None and plan_credits is not None:
         credits = plan_credits
+    # Fallback: order API may not return products (e.g. only top-level keys). Grant default credits so payment unlocks the user.
+    if credits is None:
+        credits = getattr(settings, "DEFAULT_PAYMENT_CREDITS", 50)
 
     sub = get_subscription(number, db)
     now = datetime.now(timezone.utc)
