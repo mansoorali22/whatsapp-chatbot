@@ -67,10 +67,34 @@ def _strip_refusal_from_answer(answer: str) -> str:
     return out if out else answer
 
 
-def _use_dutch_page_word(user_message: str) -> bool:
-    """True if we should use 'pagina' instead of 'page' in citations (user writes in Dutch or config is Dutch)."""
+def _message_suggests_dutch(user_message: str) -> bool:
+    """True if the user's message content suggests Dutch (for citations only; no DEFAULT_LANGUAGE)."""
     if not user_message or not user_message.strip():
         return False
+    msg = user_message.lower().strip()
+    dutch_cues = [
+        "pagina", "welke", "waar", "bladzijde", "vind", "staat", "recept", "het boek",
+        "een vraag", "van de", "op welke", "welke pagina", "kunt u", "kun je",
+        "graag", "alsjeblieft", "dank", "bedankt", "hoeveel", "waarom", "wanneer",
+        "hoi", "halloo", "hallo", "hoe ", "hoe werkt", "wie ben", "vertellen", "mij ",
+        "jij ", "dit ", "werkt", "gedaan", "dankjewel", "dank je",
+        "goedemorgen", "goedemiddag", "goedenmiddag", "goedenavond", "goedendag",
+        "goede morgen", "goede middag", "goede avond", "goede dag", "dag ", "dag!",
+    ]
+    english_cues = [
+        "what", "which", "where", "how", "when", "why", "best", "before", "training",
+        "eat", "tell me", "thank", "thanks", "please", "hello", "hi ", "hey",
+    ]
+    has_dutch = any(c in msg for c in dutch_cues)
+    has_english = any(c in msg for c in english_cues)
+    return has_dutch and not has_english
+
+
+def _use_dutch_page_word(user_message: str) -> bool:
+    """True if we should use Dutch for greeting/refusal/welcome (message or DEFAULT_LANGUAGE)."""
+    if not user_message or not user_message.strip():
+        lang = getattr(settings, "DEFAULT_LANGUAGE", "") or ""
+        return "dutch" in lang.lower() or lang.lower() == "nl"
     lang = getattr(settings, "DEFAULT_LANGUAGE", "") or ""
     if "dutch" in lang.lower() or lang.lower() == "nl":
         return True
@@ -166,8 +190,8 @@ def _answer_has_page_reference(answer: str) -> bool:
 
 
 def _localize_page_citations(user_message: str, answer: str) -> str:
-    """Replace English 'page N' with Dutch 'pagina N' when the user is writing in Dutch."""
-    if not answer or not _use_dutch_page_word(user_message):
+    """Replace English 'page N' with Dutch 'pagina N' only when the user's message suggests Dutch (not app default)."""
+    if not answer or not _message_suggests_dutch(user_message):
         return answer
     # "page 196" / "page 197" -> "pagina 196" / "pagina 197"
     answer = re.sub(r"\bpage\s+(\d+)", r"pagina \1", answer, flags=re.IGNORECASE)
@@ -430,7 +454,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 part = _localize_page_citations(q, part)
                 all_used_docs.extend(doc.metadata for doc, _ in relevant_docs)
                 if _user_asks_for_reference(q) and not _answer_has_page_reference(part):
-                    ref_line = _format_references_line([doc.metadata for doc, _ in relevant_docs], use_dutch=_use_dutch_page_word(q))
+                    ref_line = _format_references_line([doc.metadata for doc, _ in relevant_docs], use_dutch=_message_suggests_dutch(q))
                     if ref_line:
                         part = (part.rstrip() + "\n\n" + ref_line).strip()
                 parts.append(part)
@@ -519,7 +543,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             used_docs = [doc.metadata for doc, _ in relevant_docs]
             # If user asked for reference/source/page but the model didn't include one, append references from excerpts
             if _user_asks_for_reference(user_input) and not _answer_has_page_reference(answer):
-                ref_line = _format_references_line(used_docs, use_dutch=_use_dutch_page_word(user_input))
+                ref_line = _format_references_line(used_docs, use_dutch=_message_suggests_dutch(user_input))
                 if ref_line:
                     answer = (answer.rstrip() + "\n\n" + ref_line).strip()
 
