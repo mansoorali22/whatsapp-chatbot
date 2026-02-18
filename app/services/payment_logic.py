@@ -94,16 +94,23 @@ def deduct_credit(whatsapp_number: str, db: Session) -> bool:
 def get_subscription(whatsapp_number: str, db: Session) -> Optional[Subscription]:
     """
     Get subscription row by WhatsApp number (E.164).
-    Tries normalized form first; if not found and number has leading +, tries digits-only,
-    so webhook (e.g. +316...) finds the same row as WhatsApp (316...).
+    Tries normalized form, then digits-only, then Dutch 06... so webhook and WhatsApp always match.
     """
-    number = normalize_whatsapp_number(whatsapp_number) or whatsapp_number
-    sub = db.query(Subscription).filter(Subscription.whatsapp_number == number).first()
-    if sub:
-        return sub
+    number = normalize_whatsapp_number(whatsapp_number) or (whatsapp_number and str(whatsapp_number).strip()) or ""
+    if not number:
+        return None
+    # Normalize again in case whatsapp_number was raw (e.g. 06...)
+    number = normalize_whatsapp_number(number) or number
+    candidates = [number]
     if number.startswith("+"):
-        sub = db.query(Subscription).filter(Subscription.whatsapp_number == number[1:]).first()
-    return sub
+        candidates.append(number[1:])  # 31612345678
+        if number.startswith("+31") and len(number) >= 11:
+            candidates.append("0" + number[3:])  # 0612345678
+    for c in candidates:
+        sub = db.query(Subscription).filter(Subscription.whatsapp_number == c).first()
+        if sub:
+            return sub
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +137,25 @@ def check_rate_limit(whatsapp_number: str, db: Session) -> bool:
 
 def normalize_whatsapp_number(value: Any) -> Optional[str]:
     """
-    Ensure WhatsApp number is E.164-like string (digits, optional leading +).
+    Ensure WhatsApp number is E.164-like (e.g. +31612345678).
+    Converts Dutch 06... to +31 6... so webhook and WhatsApp match the same row.
     """
     if value is None:
         return None
     s = str(value).strip()
     if not s:
         return None
-    # Remove spaces and common separators; keep digits and leading +
     digits = "".join(c for c in s if c.isdigit() or c == "+")
+    if not digits:
+        return None
     if digits.startswith("+"):
-        return digits
+        digits = digits[1:]
+    # Dutch: 06xxxxxxxx (9 digits) -> 316xxxxxxxx
+    if digits.startswith("0") and len(digits) >= 9:
+        digits = "31" + digits[1:]
+    elif len(digits) >= 9 and not digits.startswith("31") and digits.startswith("6"):
+        # e.g. 612345678 (9 digits, no country code) -> assume NL
+        digits = "31" + digits
     return "+" + digits if digits else None
 
 
@@ -169,6 +184,7 @@ def handle_subscription_created(
 
     sub = get_subscription(number, db)
     now = datetime.now(timezone.utc)
+    logger.info(f"handle_subscription_created: number=***{number[-4:] if len(number) >= 4 else '****'}, found_sub={sub is not None}, plan_name={plan_name}, credits={credits}")
 
     if sub:
         sub.status = "active"

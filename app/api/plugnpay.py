@@ -11,7 +11,9 @@ import httpx
 from fastapi import APIRouter, Request, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.db.connection import get_db
+from sqlalchemy.exc import OperationalError
+
+from app.db.connection import get_db, SessionLocal
 from app.core.config import settings
 from app.services.payment_logic import process_webhook_event
 
@@ -42,18 +44,17 @@ PLUGANDPAY_API_BASE_DEFAULT = "https://api.plugandpay.com"
 PLUGANDPAY_ORDER_PATH = "/v2/orders/{id}"
 
 
-async def _fetch_order_phone(order_id: int) -> Optional[str]:
+async def _fetch_order_details(order_id: int) -> dict:
     """
-    Fetch order by ID from PlugAndPay API and return customer phone.
-    Uses https://api.plugandpay.com and GET /v2/orders/{id} (per plug-and-pay/sdk-php).
-    Response body has order in body["data"]; we search for phone in data and nested objects.
+    Fetch order by ID from PlugAndPay API. Returns dict with whatsapp_number, plan_name, credits
+    so we can link payment to subscription and set credits when webhook payload is minimal.
     """
+    out = {}
     api_url = (
         getattr(settings, "PLUG_N_PAY_API_URL", None)
         or os.environ.get("PLUG_N_PAY_API_URL", "").strip().rstrip("/")
         or PLUGANDPAY_API_BASE_DEFAULT
     )
-    # Use API token if set (from admin); else fall back to webhook token (401 = need API token from PlugAndPay admin)
     token = (
         getattr(settings, "PLUG_N_PAY_API_TOKEN", None)
         or os.environ.get("PLUG_N_PAY_API_TOKEN", "").strip()
@@ -61,43 +62,94 @@ async def _fetch_order_phone(order_id: int) -> Optional[str]:
         or os.environ.get("PLUG_N_PAY_TOKEN")
     )
     if not token:
-        logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_API_TOKEN or PLUG_N_PAY_TOKEN not set on Render")
-        return None
-    # Request billing so we get contact.telephone (per plug-and-pay/sdk-php: OrderIncludes.BILLING, Contact has telephone)
+        logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_API_TOKEN or PLUG_N_PAY_TOKEN not set")
+        return out
     path = PLUGANDPAY_ORDER_PATH.format(id=order_id)
     url = api_url.rstrip("/") + path + "?include=billing"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
             if r.status_code != 200:
-                logger.warning("PlugAndPay API order %s returned %s: %s", order_id, r.status_code, r.text[:200] if r.text else "")
-                return None
+                logger.warning("PlugAndPay API order %s returned %s: %s", order_id, r.status_code, (r.text or "")[:200])
+                return out
             data = r.json()
             if not isinstance(data, dict):
-                return None
-            # API returns { "data": { ... order ... } } per SDK BodyToOrder::build($response->body()['data'])
+                return out
             payload = data.get("data") if isinstance(data.get("data"), dict) else data
             phone = _find_phone_in_dict(payload)
+            if not phone:
+                for key in ("order", "receiver", "customer", "billing", "data"):
+                    if isinstance(data.get(key), dict):
+                        phone = _find_phone_in_dict(data[key])
+                        if phone:
+                            break
             if phone:
+                out["whatsapp_number"] = phone
                 logger.info("Fetched order %s from PlugAndPay API; found phone", order_id)
-                return phone
-            for key in ("order", "receiver", "customer", "billing", "data"):
-                if isinstance(data.get(key), dict):
-                    phone = _find_phone_in_dict(data[key])
-                    if phone:
-                        return phone
-            try:
-                hint = _structure_hint(payload)
-                logger.warning(
-                    "PlugAndPay API order %s: response 200 but no phone in JSON. Structure hint (keys only): %s",
-                    order_id,
-                    hint,
+            # Plan name and credits from order: try multiple response shapes
+            order = payload if isinstance(payload, dict) else {}
+            order = order.get("order") or data.get("order") or order
+            if not isinstance(order, dict):
+                order = {}
+            products = (
+                order.get("products")
+                or order.get("items")
+                or order.get("line_items")
+                or data.get("products")
+                or data.get("items")
+                or []
+            )
+            if isinstance(products, dict):
+                products = list(products.values()) if products else []
+            if not products and isinstance(payload, dict):
+                for key in ("products", "items", "line_items"):
+                    val = payload.get(key)
+                    if isinstance(val, list) and val:
+                        products = val
+                        break
+            first = None
+            if products:
+                first = products[0] if isinstance(products[0], dict) else {}
+                if isinstance(first, dict) and isinstance(first.get("product"), dict):
+                    first = first.get("product")
+            if isinstance(first, dict):
+                plan_name = (
+                    first.get("title")
+                    or first.get("name")
+                    or first.get("slug")
+                    or first.get("description")
+                    or first.get("product_name")
+                    or ""
                 )
-            except Exception:
-                logger.warning("PlugAndPay API order %s: response 200 but no phone (top-level keys: %s)", order_id, list(data.keys()) if isinstance(data, dict) else "n/a")
+                if isinstance(plan_name, str) and plan_name.strip():
+                    out["plan_name"] = plan_name.strip()
+                cred = first.get("credits") or first.get("quantity") or first.get("amount")
+                if cred is not None:
+                    try:
+                        out["credits"] = int(cred)
+                    except (TypeError, ValueError):
+                        pass
+                if out.get("credits") is None and out.get("plan_name"):
+                    m = re.search(r"credits[-_]?(\d+)|(\d+)\s*credits", out["plan_name"], re.I)
+                    if m:
+                        out["credits"] = int(m.group(1) or m.group(2))
+            if not out.get("plan_name") or out.get("credits") is None:
+                logger.info(
+                    "Order %s: plan_name=%s credits=%s (top keys: %s)",
+                    order_id,
+                    out.get("plan_name"),
+                    out.get("credits"),
+                    list(payload.keys())[:20] if isinstance(payload, dict) else "n/a",
+                )
     except Exception as e:
         logger.warning("PlugAndPay API fetch order %s failed: %s", order_id, e)
-    return None
+    return out
+
+
+async def _fetch_order_phone(order_id: int) -> Optional[str]:
+    """Fetch order and return only the phone (backward compatibility)."""
+    details = await _fetch_order_details(order_id)
+    return details.get("whatsapp_number")
 
 
 def _find_phone_in_dict(d: Any, depth: int = 0, max_depth: int = 4) -> Optional[str]:
@@ -369,10 +421,11 @@ async def plugnpay_webhook(
             try:
                 oid = int(trigger_id)
                 logger.info("Fetching order %s from PlugAndPay API (triggerable_type=%s)", oid, trigger_type)
-                fetched = await _fetch_order_phone(oid)
-                if fetched:
-                    data["whatsapp_number"] = fetched
-                else:
+                order_details = await _fetch_order_details(oid)
+                for key, value in order_details.items():
+                    if value is not None and data.get(key) is None:
+                        data[key] = value
+                if not data.get("whatsapp_number"):
                     logger.warning("PlugAndPay API returned no phone for order %s", oid)
             except (TypeError, ValueError) as e:
                 logger.warning("Invalid triggerable_id %s: %s", trigger_id, e)
@@ -408,6 +461,23 @@ async def plugnpay_webhook(
             "ok" if ok else "ignored",
         )
         return {"status": "ok" if ok else "ignored", "event_type": event_type}
+    except OperationalError as e:
+        err_str = str(e).lower()
+        if "ssl" in err_str or "closed" in err_str or "connection" in err_str:
+            logger.warning("Plug&Pay webhook: DB connection stale (%s), retrying with fresh session", err_str[:80])
+            db_fresh = SessionLocal()
+            try:
+                ok = process_webhook_event(event_type, data, db_fresh)
+                logger.info(
+                    "Plug&Pay webhook handled (retry): type=%s whatsapp=%s status=%s",
+                    event_type,
+                    _mask_number(data.get("whatsapp_number", "")),
+                    "ok" if ok else "ignored",
+                )
+                return {"status": "ok" if ok else "ignored", "event_type": event_type}
+            finally:
+                db_fresh.close()
+        raise
     except Exception as e:
         logger.exception(f"Webhook processing error: {e}")
         # Still return 200 so Plug & Pay does not retry indefinitely
