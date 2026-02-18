@@ -190,13 +190,18 @@ def _answer_has_page_reference(answer: str) -> bool:
 
 
 def _localize_page_citations(user_message: str, answer: str) -> str:
-    """Replace English 'page N' with Dutch 'pagina N' only when the user's message suggests Dutch (not app default)."""
-    if not answer or not _message_suggests_dutch(user_message):
+    """Match citation language to user message: Dutch -> 'pagina'; English -> 'page'. Fix model output if it used the wrong language."""
+    if not answer:
         return answer
-    # "page 196" / "page 197" -> "pagina 196" / "pagina 197"
-    answer = re.sub(r"\bpage\s+(\d+)", r"pagina \1", answer, flags=re.IGNORECASE)
-    # "pages 1-5" / "pages 196, 197" -> "pagina's"
-    answer = re.sub(r"\bpages\s+", "pagina's ", answer, flags=re.IGNORECASE)
+    if _message_suggests_dutch(user_message):
+        # User wrote in Dutch: use "pagina"
+        answer = re.sub(r"\bpage\s+(\d+)", r"pagina \1", answer, flags=re.IGNORECASE)
+        answer = re.sub(r"\bpages\s+", "pagina's ", answer, flags=re.IGNORECASE)
+    else:
+        # User wrote in English: ensure citations are in English (model sometimes outputs "Zie pagina")
+        answer = re.sub(r"\bZie pagina\b", "See page", answer, flags=re.IGNORECASE)
+        answer = re.sub(r"\bReferenties:\s*pagina\b", "References: page", answer, flags=re.IGNORECASE)
+        answer = re.sub(r"\bpagina\s+(\d+)", r"page \1", answer, flags=re.IGNORECASE)
     return answer
 
 
