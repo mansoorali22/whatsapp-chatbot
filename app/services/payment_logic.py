@@ -179,7 +179,7 @@ def handle_subscription_created(
                 sub.credits = credits  # Monthly: replace (no carryover)
             else:
                 sub.credits = (sub.credits or 0) + credits
-                sub.total_purchased = (sub.total_purchased or 0) + credits
+            sub.total_purchased = (sub.total_purchased or 0) + credits  # lifetime credits bought (monthly + pre-paid)
         sub.is_recurring = is_recurring or is_monthly
         sub.is_trial = False
         sub.subscription_start = sub.subscription_start or now
@@ -242,7 +242,7 @@ def handle_subscription_updated(
             sub.credits = credits
         else:
             sub.credits = (sub.credits or 0) + credits
-            sub.total_purchased = (sub.total_purchased or 0) + credits
+        sub.total_purchased = (sub.total_purchased or 0) + credits  # lifetime credits bought
     if is_recurring is not None:
         sub.is_recurring = is_recurring
     if subscription_end is not None:
