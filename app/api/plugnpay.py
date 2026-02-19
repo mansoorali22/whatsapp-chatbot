@@ -9,12 +9,11 @@ import re
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Request, Depends, HTTPException, Query
+from fastapi import APIRouter, Request, HTTPException, Query
 from sqlalchemy.orm import Session
-
 from sqlalchemy.exc import OperationalError
 
-from app.db.connection import get_db, SessionLocal
+from app.db.connection import SessionLocal
 from app.core.config import settings
 from app.services.payment_logic import process_webhook_event
 
@@ -168,6 +167,22 @@ async def _fetch_order_details(order_id: int) -> dict:
                                     pass
                     except Exception:
                         pass
+            # When API returns flat order (no products/meta), derive credits from amount or use default
+            if out.get("credits") is None and isinstance(payload, dict):
+                amount_raw = payload.get("amount") or payload.get("amount_with_tax") or order.get("amount") or order.get("amount_with_tax")
+                if amount_raw is not None:
+                    try:
+                        amount_val = float(amount_raw)
+                        # Optional: map known amounts to credits (e.g. 5.00 EUR -> 50 credits)
+                        default_credits = getattr(settings, "DEFAULT_PAYMENT_CREDITS", 50)
+                        out["credits"] = default_credits
+                        if not out.get("plan_name"):
+                            out["plan_name"] = str(default_credits)  # e.g. "50" -> PLAN_CREDITS["50"]
+                        logger.info("Order %s: no products; using amount %.2f -> credits=%s", order_id, amount_val, out["credits"])
+                    except (TypeError, ValueError):
+                        pass
+            if not out.get("plan_name") and out.get("credits") is not None:
+                out["plan_name"] = str(out["credits"])
             if not out.get("plan_name") or out.get("credits") is None:
                 logger.info(
                     "Order %s: plan_name=%s credits=%s (top keys: %s)",
@@ -418,14 +433,17 @@ def _mask_number(num: str) -> str:
     return "***" + num[-6:] if len(num) > 6 else "***" + num[-4:]
 
 
+def _process_webhook_with_session(event_type: str, data: dict, db: Session) -> bool:
+    """Run process_webhook_event with the given session. Isolated for retry with fresh session."""
+    return process_webhook_event(event_type, data, db)
+
+
 @router.post("/webhook")
-async def plugnpay_webhook(
-    request: Request,
-    db: Session = Depends(get_db),
-):
+async def plugnpay_webhook(request: Request):
     """
     Receives Plug & Pay webhook events (payment received, subscription created/updated/cancelled).
     Updates the Subscription table; responds 200 quickly so Plug & Pay does not retry.
+    Uses a fresh DB session per request to avoid stale connections (e.g. SSL closed).
     """
     try:
         body = await request.json()
@@ -487,8 +505,9 @@ async def plugnpay_webhook(
         )
         return {"status": "ignored", "reason": "missing_whatsapp_number"}
 
+    db = SessionLocal()
     try:
-        ok = process_webhook_event(event_type, data, db)
+        ok = _process_webhook_with_session(event_type, data, db)
         logger.info(
             "Plug&Pay webhook handled: type=%s whatsapp=%s status=%s",
             event_type,
@@ -497,12 +516,13 @@ async def plugnpay_webhook(
         )
         return {"status": "ok" if ok else "ignored", "event_type": event_type}
     except OperationalError as e:
+        db.close()
         err_str = str(e).lower()
         if "ssl" in err_str or "closed" in err_str or "connection" in err_str:
-            logger.warning("Plug&Pay webhook: DB connection stale (%s), retrying with fresh session", err_str[:80])
-            db_fresh = SessionLocal()
+            logger.warning("Plug&Pay webhook: DB connection error (%s), retrying with fresh session", err_str[:80])
+            db_retry = SessionLocal()
             try:
-                ok = process_webhook_event(event_type, data, db_fresh)
+                ok = _process_webhook_with_session(event_type, data, db_retry)
                 logger.info(
                     "Plug&Pay webhook handled (retry): type=%s whatsapp=%s status=%s",
                     event_type,
@@ -511,9 +531,10 @@ async def plugnpay_webhook(
                 )
                 return {"status": "ok" if ok else "ignored", "event_type": event_type}
             finally:
-                db_fresh.close()
+                db_retry.close()
         raise
     except Exception as e:
         logger.exception(f"Webhook processing error: {e}")
-        # Still return 200 so Plug & Pay does not retry indefinitely
         return {"status": "error", "event_type": event_type, "message": str(e)}
+    finally:
+        db.close()

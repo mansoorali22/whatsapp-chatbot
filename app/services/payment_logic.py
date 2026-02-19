@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Any, Tuple
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 
 from app.db.models import Subscription
 from app.core.config import settings
@@ -365,4 +366,7 @@ def process_webhook_event(event_type: str, data: dict, db: Session) -> bool:
 
     except Exception as e:
         logger.exception(f"Error processing webhook event {event_type}: {e}")
+        # Re-raise DB connection errors so the webhook route can retry with a fresh session
+        if isinstance(e, OperationalError):
+            raise
         return False
