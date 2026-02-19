@@ -12,7 +12,23 @@ from langchain_core.output_parsers import StrOutputParser
 from app.core.config import settings
 from app.db.models import ChatLog
 
-# Welcome message for new users (first message only)
+# Single opening message (first message / greeting) – no duplicate text
+OPENING_MESSAGE_NL = (
+    "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
+    "Verwacht praktische tips, evidence-based advies en ideeën die je meteen kunt toepassen in je keuken en sport voorbereiding! "
+    "Nieuwsgierig of ik jouw perfecte buddy ben? Je kunt me gratis 5 vragen stellen!\n\n"
+    "De antwoorden worden automatisch gegenereerd en zijn enkel en alleen gebaseerd op de inhoud van het boek. "
+    "Wees er bewust van dat AI fouten kan maken en weet dat wij nooit medische adviezen zullen geven."
+)
+OPENING_MESSAGE_EN = (
+    "Hi! 👋 I'm the Eat like an Athlete assistant. I'm happy to answer your questions about sports nutrition, recovery, healthy eating and recipe inspiration. "
+    "Expect practical tips, evidence-based advice and ideas you can use straight away in your kitchen and training. "
+    "Curious if I'm your perfect buddy? You can ask me 5 questions for free!\n\n"
+    "Answers are generated automatically and are based solely on the book content. "
+    "Please be aware that AI can make mistakes and we will never give medical advice."
+)
+
+# Welcome intro for first *question* (when first message is not a greeting)
 WELCOME_INTRO_NL = (
     "Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
     "Verwacht praktische tips, evidence-based advies en ideeën die je meteen kunt toepassen in je keuken en sport voorbereiding!"
@@ -342,6 +358,7 @@ def init_rag_components():
                 "4) When the user does NOT ask for a reference/source/page: do not add page numbers—just give the content. "
                 "5) When the user DOES ask for a reference, source, or page numbers (e.g. 'give reference', 'with reference', 'include source', 'which page', 'welke pagina', 'waar vind ik', 'where can I find', 'give me the page', 'met bron', 'met referentie', 'cite', 'page number', 'bladzijde', in the same message or a follow-up), you MUST include the page/section numbers from the excerpt labels in your answer. Use 'page N' in English (e.g. 'See page 42, 43.') and 'pagina N' in Dutch (e.g. 'Zie pagina 42, 43.'). List all relevant pages from the excerpts you used. "
                 "6) ONLY when excerpts have NOTHING relevant to the question, reply with exactly: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\" then \"Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!\". Never mix: if you have relevant content, answer only that; if none, use only this refusal. "
+                "7) When your answer gives specific nutritional advice (e.g. amounts of food, grams of protein, portions like '5 eggs', '400g quark'), add a short disclaimer in the same language as the answer. Dutch: 'Dit is algemene informatie; voor persoonlijk advies kun je een (sport)diëtist raadplegen.' English: 'This is general information; for personal advice you can consult a (sports) dietitian.' Keep the disclaimer to one sentence at the end. "
             ),
             ("system", "Context excerpts:\n{context}"),
             MessagesPlaceholder("chat_history"),
@@ -380,22 +397,10 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
     # 1. Intent check
     intent = intent_chain.invoke({"input": user_input}).strip().upper()
     if "GREETING" in intent:
-        if _use_dutch_page_word(user_input):
-            reply = (
-                "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. "
-                "Ik beantwoord vragen alleen op basis van het boek. "
-                "Stel gerust een vraag over voeding, training of recepten."
-            )
-        else:
-            reply = (
-                "Hi! 👋 I'm the Eat like an Athlete assistant. "
-                "I answer questions only from the book. "
-                "Ask me anything about nutrition, training or recipes."
-            )
-        final = _prepend_welcome_if_first(reply, is_first_message, user_input)
-        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=final, response_type="greeting", chunks_used=[], history_snapshot=[]))
+        reply = OPENING_MESSAGE_NL if _use_dutch_page_word(user_input) else OPENING_MESSAGE_EN
+        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=reply, response_type="greeting", chunks_used=[], history_snapshot=[]))
         db.commit()
-        return final
+        return reply
     if "THANKS" in intent:
         if _use_dutch_page_word(user_input):
             reply = "Graag gedaan! Stel gerust nog een vraag over het boek."

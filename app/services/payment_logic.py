@@ -18,14 +18,15 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Plan name (lowercase/substring) -> (credits, is_monthly_subscription)
-# Monthly: credits replaced each period (no carryover). Pre-paid: credits added.
+# SUBSCRIPTION MONTHLY (no carryover): new credits each month, previous balance replaced
+# PRE-PAID: credits added to current balance
+# Plan name (substring match) -> (credits, is_monthly)
 PLAN_CREDITS = {
-    "start": (75, True),
-    "active": (150, True),
-    "pro": (300, True),
-    "50": (50, False),
-    "100": (100, False),
+    "start": (75, True),   # Monthly: 75 credits
+    "active": (150, True), # Monthly: 150 credits
+    "pro": (300, True),    # Monthly: 300 credits
+    "50": (50, False),    # Pre-paid: 50 credits
+    "100": (100, False),  # Pre-paid: 100 credits
 }
 
 
