@@ -123,6 +123,8 @@ class Settings(BaseSettings):
     )
     # When order API returns no plan/credits, grant this many credits so payment still unlocks the user
     DEFAULT_PAYMENT_CREDITS: int = 50
+    # Paid subscription default duration when webhook does not send subscription_end
+    SUBSCRIPTION_DURATION_DAYS: int = 30
 
     # -------------------
     # Pydantic Config

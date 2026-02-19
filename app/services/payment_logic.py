@@ -8,7 +8,7 @@ Plans:
 - Trial: 7 days, max 15 questions (TRIAL_CREDITS=15); at question 8 send warning.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Any, Tuple
 
 from sqlalchemy.orm import Session
@@ -191,7 +191,11 @@ def handle_subscription_created(
 
     if sub:
         sub.status = "active"
-        sub.plan_name = plan_name or sub.plan_name
+        # When payment updates a former trial and webhook sends no plan, set plan_name to "Paid" (not "Trial")
+        if plan_name:
+            sub.plan_name = plan_name
+        elif (sub.plan_name or "").strip().lower() == "trial":
+            sub.plan_name = "Paid"
         sub.plugnpay_customer_id = plugnpay_customer_id or sub.plugnpay_customer_id
         if credits is not None:
             if is_monthly:
@@ -202,24 +206,29 @@ def handle_subscription_created(
         sub.is_recurring = is_recurring or is_monthly
         sub.is_trial = False
         sub.subscription_start = sub.subscription_start or now
-        sub.subscription_end = subscription_end or sub.subscription_end
+        # Paid subscription: default expiry 1 month if not provided
+        default_days = getattr(settings, "SUBSCRIPTION_DURATION_DAYS", 30)
+        default_end = now + timedelta(days=default_days)
+        sub.subscription_end = subscription_end or sub.subscription_end or default_end
         sub.updated_at = now
         db.commit()
         db.refresh(sub)
         logger.info(f"Subscription updated for {number}, plan={plan_name}, credits={'set' if is_monthly else '+'}={credits}")
         return sub
 
+    default_days = getattr(settings, "SUBSCRIPTION_DURATION_DAYS", 30)
+    default_end = now + timedelta(days=default_days)
     sub = Subscription(
         whatsapp_number=number,
         status="active",
-        plan_name=plan_name or "Default Plan",
+        plan_name=plan_name or "Paid",
         plugnpay_customer_id=plugnpay_customer_id,
         credits=credits if credits is not None else 15,
         total_purchased=credits if credits is not None else 0,
         is_trial=False,
         is_recurring=is_recurring or is_monthly,
         subscription_start=now,
-        subscription_end=subscription_end,
+        subscription_end=subscription_end or default_end,
     )
     db.add(sub)
     db.commit()

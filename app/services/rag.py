@@ -84,6 +84,7 @@ def _message_suggests_dutch(user_message: str) -> bool:
     english_cues = [
         "what", "which", "where", "how", "when", "why", "best", "before", "training",
         "eat", "tell me", "thank", "thanks", "please", "hello", "hi ", "hey",
+        "give", "reference", "references", "source", "page",
     ]
     has_dutch = any(c in msg for c in dutch_cues)
     has_english = any(c in msg for c in english_cues)
