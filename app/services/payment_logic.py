@@ -158,6 +158,9 @@ def normalize_whatsapp_number(value: Any) -> Optional[str]:
     elif len(digits) >= 9 and not digits.startswith("31") and digits.startswith("6"):
         # e.g. 612345678 (9 digits, no country code) -> assume NL
         digits = "31" + digits
+    # 31 + leading 0 (e.g. 310652661250 from "+31 0652661250") -> 31 + 9 digits (31652661250)
+    if digits.startswith("31") and len(digits) > 10 and digits[2:3] == "0":
+        digits = "31" + digits[3:]
     return "+" + digits if digits else None
 
 

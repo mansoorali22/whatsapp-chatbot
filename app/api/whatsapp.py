@@ -8,7 +8,12 @@ import httpx
 from app.db.connection import get_db, SessionLocal
 from app.core.config import settings
 from app.services.rag import get_response, _use_dutch_page_word
-from app.services.payment_logic import verify_subscription, deduct_credit, get_subscription, normalize_whatsapp_number
+from app.services.payment_logic import (
+    verify_subscription,
+    deduct_credit,
+    get_subscription,
+    normalize_whatsapp_number,
+)
 from app.db.models import Subscription, ChatLog, ProcessedMessage
 
 router = APIRouter()
@@ -118,7 +123,7 @@ def _process_webhook_messages(body: dict, db: Session, background_tasks: Backgro
                 continue
             db.add(ProcessedMessage(message_id=message_id))
             sender_for_db = normalize_whatsapp_number(sender) or sender
-            subscription = db.query(Subscription).filter_by(whatsapp_number=sender_for_db).first()
+            subscription = get_subscription(sender_for_db, db)
             if not subscription:
                 now = datetime.now(timezone.utc)
                 trial_days = getattr(settings, "TRIAL_DAYS", 7)
@@ -134,7 +139,8 @@ def _process_webhook_messages(body: dict, db: Session, background_tasks: Backgro
                 )
                 db.add(subscription)
                 db.commit()
-            is_first_message = db.query(ChatLog).filter(ChatLog.whatsapp_number == sender_for_db).count() == 0
+            number_for_lookup = subscription.whatsapp_number if subscription else sender_for_db
+            is_first_message = db.query(ChatLog).filter(ChatLog.whatsapp_number == number_for_lookup).count() == 0
             background_tasks.add_task(handle_rag_and_reply, sender, text, is_first_message)
             logger.info(f"📩 NEW MESSAGE FROM {sender}: {text}")
 
