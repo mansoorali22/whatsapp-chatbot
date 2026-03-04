@@ -19,7 +19,12 @@ if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
         # Fallback: try psycopg2 if psycopg is not available
         pass
 
-engine = create_engine(DATABASE_URL)
+# Prevent "SSL connection has been closed unexpectedly" on Render/Neon when connections go idle
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,   # Check connection is alive before use; discard and replace if dead
+    pool_recycle=300,     # Recycle connections after 5 min (many servers close idle after ~10 min)
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 class Base(DeclarativeBase):

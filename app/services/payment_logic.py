@@ -3,9 +3,14 @@ Payment and subscription logic for Plug & Pay webhook events.
 All operations use the Subscription table; no external API calls.
 
 Plans:
-- Subscription monthly (no carryover): Start=75, Active=150, Pro=300 credits/month
-- Pre-paid: 50 or 100 credits (add to balance)
+- Subscription monthly (no carryover): Start=75, Active=150, Pro=300 credits/month; validity 1 month.
+- Pre-paid: 50 or 100 credits (add to balance); validity 6 months.
 - Trial: 7 days, max 15 questions (TRIAL_CREDITS=15); at question 8 send warning.
+
+Overlap rules (subscription + subscription, subscription + prepaid):
+- Expiry is always max(current_end, new_period_end). So buying prepaid while on subscription extends access;
+  buying a subscription while on prepaid extends to the later of the two.
+- Monthly: new period = now + 1 month; prepaid: new period = now + 6 months.
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -19,9 +24,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# SUBSCRIPTION MONTHLY (no carryover): new credits each month, previous balance replaced
-# PRE-PAID: credits added to current balance
-# Plan name (substring match) -> (credits, is_monthly)
+# SUBSCRIPTION MONTHLY (no carryover): new credits each month, previous balance replaced; validity 1 month
+# PRE-PAID: credits added to current balance; validity 6 months
+# Plan key (substring match) -> (credits, is_monthly)
 PLAN_CREDITS = {
     "start": (75, True),   # Monthly: 75 credits
     "active": (150, True), # Monthly: 150 credits
@@ -164,6 +169,13 @@ def normalize_whatsapp_number(value: Any) -> Optional[str]:
     return "+" + digits if digits else None
 
 
+def _period_end_days(is_monthly: bool) -> int:
+    """Return validity days for this purchase: subscription = 1 month, prepaid = 6 months."""
+    if is_monthly:
+        return getattr(settings, "SUBSCRIPTION_DURATION_DAYS", 30)
+    return getattr(settings, "PREPAID_VALIDITY_DAYS", 180)
+
+
 def handle_subscription_created(
     whatsapp_number: str,
     db: Session,
@@ -176,8 +188,9 @@ def handle_subscription_created(
 ) -> Subscription:
     """
     Create or update subscription on 'subscription_created' / 'payment_received'.
-    Monthly plans (Start/Active/Pro): set credits to plan amount (no carryover).
-    Pre-paid (50/100): add credits to balance.
+    Monthly plans (Start/Active/Pro): set credits to plan amount (no carryover); validity 1 month.
+    Pre-paid (50/100): add credits to balance; validity 6 months.
+    Overlap: subscription_end = max(current_end, new_period_end) so stacking extends access.
     """
     number = normalize_whatsapp_number(whatsapp_number)
     if not number:
@@ -186,17 +199,30 @@ def handle_subscription_created(
     plan_credits, is_monthly = _plan_credits_from_name(plan_name)
     if credits is None and plan_credits is not None:
         credits = plan_credits
-    # Fallback: order API may not return products (e.g. only top-level keys). Grant default credits so payment unlocks the user.
     if credits is None:
         credits = getattr(settings, "DEFAULT_PAYMENT_CREDITS", 50)
 
     sub = get_subscription(number, db)
     now = datetime.now(timezone.utc)
-    logger.info(f"handle_subscription_created: number=***{number[-4:] if len(number) >= 4 else '****'}, found_sub={sub is not None}, plan_name={plan_name}, credits={credits}")
+    period_days = _period_end_days(is_monthly)
+    new_period_end = now + timedelta(days=period_days)
+    # Overlap rule: access ends at the later of current end or this purchase's period
+    if sub and sub.subscription_end and sub.subscription_end > now:
+        effective_end = max(sub.subscription_end, new_period_end)
+    else:
+        effective_end = subscription_end or new_period_end
+
+    logger.info(
+        "handle_subscription_created: number=***%s, found_sub=%s, plan_name=%s, credits=%s, period_days=%s",
+        number[-4:] if len(number) >= 4 else "****",
+        sub is not None,
+        plan_name,
+        credits,
+        period_days,
+    )
 
     if sub:
         sub.status = "active"
-        # When payment updates a former trial and webhook sends no plan, set plan_name to "Paid" (not "Trial")
         if plan_name:
             sub.plan_name = plan_name
         elif (sub.plan_name or "").strip().lower() == "trial":
@@ -207,22 +233,20 @@ def handle_subscription_created(
                 sub.credits = credits  # Monthly: replace (no carryover)
             else:
                 sub.credits = (sub.credits or 0) + credits
-            sub.total_purchased = (sub.total_purchased or 0) + credits  # lifetime credits bought (monthly + pre-paid)
+            sub.total_purchased = (sub.total_purchased or 0) + credits
         sub.is_recurring = is_recurring or is_monthly
         sub.is_trial = False
         sub.subscription_start = sub.subscription_start or now
-        # Paid subscription: default expiry 1 month if not provided
-        default_days = getattr(settings, "SUBSCRIPTION_DURATION_DAYS", 30)
-        default_end = now + timedelta(days=default_days)
-        sub.subscription_end = subscription_end or sub.subscription_end or default_end
+        sub.subscription_end = effective_end
         sub.updated_at = now
         db.commit()
         db.refresh(sub)
-        logger.info(f"Subscription updated for {number}, plan={plan_name}, credits={'set' if is_monthly else '+'}={credits}")
+        logger.info(
+            "Subscription updated for %s, plan=%s, credits=%s=%s, subscription_end=%s",
+            number, plan_name, "set" if is_monthly else "+", credits, effective_end,
+        )
         return sub
 
-    default_days = getattr(settings, "SUBSCRIPTION_DURATION_DAYS", 30)
-    default_end = now + timedelta(days=default_days)
     sub = Subscription(
         whatsapp_number=number,
         status="active",
@@ -233,12 +257,12 @@ def handle_subscription_created(
         is_trial=False,
         is_recurring=is_recurring or is_monthly,
         subscription_start=now,
-        subscription_end=subscription_end or default_end,
+        subscription_end=effective_end,
     )
     db.add(sub)
     db.commit()
     db.refresh(sub)
-    logger.info(f"Subscription created for {number}, plan={plan_name}, credits={sub.credits}")
+    logger.info("Subscription created for %s, plan=%s, credits=%s, subscription_end=%s", number, plan_name, sub.credits, effective_end)
     return sub
 
 
@@ -252,14 +276,14 @@ def handle_subscription_updated(
     is_recurring: Optional[bool] = None,
     subscription_end: Optional[datetime] = None,
 ) -> Optional[Subscription]:
-    """Update existing subscription (plan change, renewal). Monthly: set credits (no carryover); pre-paid: add credits."""
+    """Update existing subscription (plan change, renewal). Same overlap rule: subscription_end = max(current, new period)."""
     number = normalize_whatsapp_number(whatsapp_number)
     if not number:
         return None
 
     sub = get_subscription(number, db)
     if not sub:
-        logger.warning(f"Subscription update for unknown number: {number}")
+        logger.warning("Subscription update for unknown number: %s", number)
         return None
 
     plan_credits, is_monthly = _plan_credits_from_name(plan_name or sub.plan_name)
@@ -275,16 +299,24 @@ def handle_subscription_updated(
             sub.credits = credits
         else:
             sub.credits = (sub.credits or 0) + credits
-        sub.total_purchased = (sub.total_purchased or 0) + credits  # lifetime credits bought
+        sub.total_purchased = (sub.total_purchased or 0) + credits
+        # Overlap: extend subscription_end if this purchase has a period
+        now = datetime.now(timezone.utc)
+        period_days = _period_end_days(is_monthly)
+        new_period_end = now + timedelta(days=period_days)
+        if sub.subscription_end and sub.subscription_end > now:
+            sub.subscription_end = max(sub.subscription_end, new_period_end)
+        else:
+            sub.subscription_end = subscription_end or new_period_end
     if is_recurring is not None:
         sub.is_recurring = is_recurring
-    if subscription_end is not None:
+    if subscription_end is not None and credits is None:
         sub.subscription_end = subscription_end
 
     sub.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(sub)
-    logger.info(f"Subscription updated for {number}, credits={'set' if is_monthly else '+'}={credits}")
+    logger.info("Subscription updated for %s, credits=%s=%s", number, "set" if is_monthly else "+", credits)
     return sub
 
 
