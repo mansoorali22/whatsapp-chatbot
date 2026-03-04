@@ -44,6 +44,35 @@ PLUGANDPAY_API_BASE_DEFAULT = "https://api.plugandpay.com"
 PLUGANDPAY_ORDER_PATH = "/v2/orders/{id}"
 
 
+def _credits_from_amount(amount: float) -> Optional[int]:
+    """
+    Map order amount (EUR) to credits using AMOUNT_TO_CREDITS (e.g. "9.99:100,4.99:50").
+    Uses first threshold where amount >= threshold (thresholds should be descending).
+    """
+    raw = getattr(settings, "AMOUNT_TO_CREDITS", None) or ""
+    if not raw or not raw.strip():
+        return None
+    pairs = []
+    for part in raw.split(","):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        amt_str, cred_str = part.split(":", 1)
+        try:
+            amt, cred = float(amt_str.strip()), int(cred_str.strip())
+            if amt >= 0 and cred > 0:
+                pairs.append((amt, cred))
+        except (ValueError, TypeError):
+            continue
+    if not pairs:
+        return None
+    pairs.sort(key=lambda x: -x[0])  # descending by amount
+    for threshold, credits in pairs:
+        if amount >= threshold:
+            return credits
+    return None
+
+
 async def _fetch_order_details(order_id: int) -> dict:
     """
     Fetch order by ID from PlugAndPay API. Returns dict with whatsapp_number, plan_name, credits
@@ -173,12 +202,13 @@ async def _fetch_order_details(order_id: int) -> dict:
                 if amount_raw is not None:
                     try:
                         amount_val = float(amount_raw)
-                        # Optional: map known amounts to credits (e.g. 5.00 EUR -> 50 credits)
                         default_credits = getattr(settings, "DEFAULT_PAYMENT_CREDITS", 50)
-                        out["credits"] = default_credits
+                        # Map amount -> credits if AMOUNT_TO_CREDITS is set (e.g. "9.99:100,4.99:50")
+                        mapped = _credits_from_amount(amount_val)
+                        out["credits"] = mapped if mapped is not None else default_credits
                         if not out.get("plan_name"):
-                            out["plan_name"] = str(default_credits)  # e.g. "50" -> PLAN_CREDITS["50"]
-                        logger.info("Order %s: no products; using amount %.2f -> credits=%s", order_id, amount_val, out["credits"])
+                            out["plan_name"] = str(out["credits"])
+                        logger.info("Order %s: no products; amount %.2f -> credits=%s", order_id, amount_val, out["credits"])
                     except (TypeError, ValueError):
                         pass
             if not out.get("plan_name") and out.get("credits") is not None:

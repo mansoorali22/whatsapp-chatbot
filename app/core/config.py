@@ -121,8 +121,10 @@ class Settings(BaseSettings):
         "Your trial has ended or you have no credits left. "
         "Upgrade for unlimited support: https://iamafoodie.nl/atleet-buddy"
     )
-    # When order API returns no plan/credits, grant this many credits so payment still unlocks the user
+    # When order API returns no plan/credits, grant by amount mapping or this default
     DEFAULT_PAYMENT_CREDITS: int = 50
+    # Map order amount (EUR) to credits when API has no product info. Format: "amount:credits,amount:credits" (highest amount first). E.g. "9.99:100,4.99:50"
+    AMOUNT_TO_CREDITS: Optional[str] = None  # e.g. "9.99:100,4.99:50"
     # Subscription plans: 1 month; prepaid: 6 months validity
     SUBSCRIPTION_DURATION_DAYS: int = 30
     PREPAID_VALIDITY_DAYS: int = 180

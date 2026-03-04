@@ -2,15 +2,15 @@
 Payment and subscription logic for Plug & Pay webhook events.
 All operations use the Subscription table; no external API calls.
 
-Plans:
-- Subscription monthly (no carryover): Start=75, Active=150, Pro=300 credits/month; validity 1 month.
-- Pre-paid: 50 or 100 credits (add to balance); validity 6 months.
-- Trial: 7 days, max 15 questions (TRIAL_CREDITS=15); at question 8 send warning.
+Plans (matched by substring in plan_name / product title):
+- 50 credits          → prepaid, 50 credits; validity 6 months
+- 100 credits         → prepaid, 100 credits; validity 6 months
+- Subscription Start  → monthly, 75 credits; validity 1 month
+- Subscription Active → monthly, 150 credits; validity 1 month
+- Subscription Pro    → monthly, 300 credits; validity 1 month
+- Trial               → 7 days, max TRIAL_MAX_QUESTIONS; TRIAL_CREDITS
 
-Overlap rules (subscription + subscription, subscription + prepaid):
-- Expiry is always max(current_end, new_period_end). So buying prepaid while on subscription extends access;
-  buying a subscription while on prepaid extends to the later of the two.
-- Monthly: new period = now + 1 month; prepaid: new period = now + 6 months.
+Overlap rules: subscription_end = max(current_end, new_period_end).
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -24,15 +24,14 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# SUBSCRIPTION MONTHLY (no carryover): new credits each month, previous balance replaced; validity 1 month
-# PRE-PAID: credits added to current balance; validity 6 months
-# Plan key (substring match) -> (credits, is_monthly)
+# Plan key (substring match in plan_name) -> (credits, is_monthly)
+# Names: "50 credits", "100 credits", "Subscription Start", "Subscription Active", "Subscription Pro"
 PLAN_CREDITS = {
-    "start": (75, True),   # Monthly: 75 credits
-    "active": (150, True), # Monthly: 150 credits
-    "pro": (300, True),    # Monthly: 300 credits
-    "50": (50, False),    # Pre-paid: 50 credits
-    "100": (100, False),  # Pre-paid: 100 credits
+    "start": (75, True),   # Subscription Start
+    "active": (150, True), # Subscription Active
+    "pro": (300, True),    # Subscription Pro
+    "50": (50, False),    # 50 credits (prepaid)
+    "100": (100, False),  # 100 credits (prepaid)
 }
 
 
