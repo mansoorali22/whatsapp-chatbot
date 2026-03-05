@@ -134,7 +134,7 @@ async def _fetch_order_details(order_id: int) -> dict:
         logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_API_TOKEN or PLUG_N_PAY_TOKEN not set")
         return out
     path = PLUGANDPAY_ORDER_PATH.format(id=order_id)
-    url = api_url.rstrip("/") + path + "?include=billing,order_lines,products"
+    url = api_url.rstrip("/") + path + "?include=billing,custom_fields"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
