@@ -25,12 +25,28 @@ logger = logging.getLogger(__name__)
 # Match by subscription name (substring). Order matters: 100 before 50 so "150" doesn't match "50".
 # Product names: "Buddy_abonnement Active", "Buddy_abonnement Pro", "Buddy_abonnement Start", "Buddy_Credits 100", "Buddy_Credits 50"
 PLAN_CREDITS = {
-    "start": (75, True),    # Buddy_abonnement Start (75 credits)
-    "active": (150, True),  # Buddy_abonnement Active (150 credits)
-    "pro": (300, True),     # Buddy_abonnement Pro (300 credits)
-    "100": (100, False),   # Buddy_Credits 100
-    "50": (50, False),     # Buddy_Credits 50
+    "start": (75, True),    # Buddy_abonnement Start (75 credits) → 30 days
+    "active": (150, True),  # Buddy_abonnement Active (150 credits) → 30 days
+    "pro": (300, True),     # Buddy_abonnement Pro (300 credits) → 30 days
+    "100": (100, False),   # Buddy_Credits 100 → 180 days
+    "50": (50, False),     # Buddy_Credits 50 → 180 days
 }
+
+# Display names for DB (not "50" or "75" but full plan names). Expiry: 50/100 = 180 days, subscriptions = 30 days.
+PLAN_DISPLAY_NAMES = {
+    50: "50 credits",
+    100: "100 credits",
+    75: "Subscription Start",
+    150: "Subscription Active",
+    300: "Subscription Pro",
+}
+
+
+def _plan_display_name(credits: Optional[int], is_monthly: bool) -> Optional[str]:
+    """Return display name for plan (e.g. 'Subscription Start', '100 credits'). Used when plan_name would be a bare number."""
+    if credits is not None and credits in PLAN_DISPLAY_NAMES:
+        return PLAN_DISPLAY_NAMES[credits]
+    return None
 
 
 def _plan_credits_from_name(plan_name: Optional[str]) -> Tuple[Optional[int], bool]:
@@ -167,7 +183,7 @@ def normalize_whatsapp_number(value: Any) -> Optional[str]:
 
 
 def _period_end_days(is_monthly: bool) -> int:
-    """Return validity days for this purchase: subscription = 1 month, prepaid = 6 months."""
+    """Return validity days: 50/100 credits = 180 days; Subscription Start/Active/Pro = 30 days."""
     if is_monthly:
         return getattr(settings, "SUBSCRIPTION_DURATION_DAYS", 30)
     return getattr(settings, "PREPAID_VALIDITY_DAYS", 180)
@@ -198,6 +214,11 @@ def handle_subscription_created(
         credits = plan_credits
     if credits is None:
         credits = getattr(settings, "DEFAULT_PAYMENT_CREDITS", 50)
+    # Use plan display name in DB instead of "50", "75", etc. (50/100 credits = 180 days, subscriptions = 30 days)
+    if not plan_name or (isinstance(plan_name, str) and plan_name.strip().isdigit()):
+        display = _plan_display_name(credits, is_monthly)
+        if display:
+            plan_name = display
 
     sub = get_subscription(number, db)
     now = datetime.now(timezone.utc)
@@ -244,10 +265,11 @@ def handle_subscription_created(
         )
         return sub
 
+    display_name = plan_name or _plan_display_name(credits, is_monthly) or "Paid"
     sub = Subscription(
         whatsapp_number=number,
         status="active",
-        plan_name=plan_name or "Paid",
+        plan_name=display_name,
         plugnpay_customer_id=plugnpay_customer_id,
         credits=credits if credits is not None else 15,
         total_purchased=credits if credits is not None else 0,
@@ -259,7 +281,7 @@ def handle_subscription_created(
     db.add(sub)
     db.commit()
     db.refresh(sub)
-    logger.info("Subscription created for %s, plan=%s, credits=%s, subscription_end=%s", number, plan_name, sub.credits, effective_end)
+    logger.info("Subscription created for %s, plan=%s, credits=%s, subscription_end=%s", number, display_name, sub.credits, effective_end)
     return sub
 
 

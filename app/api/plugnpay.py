@@ -15,7 +15,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.db.connection import SessionLocal
 from app.core.config import settings
-from app.services.payment_logic import process_webhook_event, _plan_credits_from_name
+from app.services.payment_logic import process_webhook_event, _plan_credits_from_name, _plan_display_name
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -281,7 +281,7 @@ async def _fetch_order_details(order_id: int) -> dict:
                         if mapped is not None:
                             out["credits"] = mapped
                             if not out.get("plan_name") and mapped in _VALID_CREDITS:
-                                out["plan_name"] = str(out["credits"])
+                                out["plan_name"] = _plan_display_name(mapped, mapped not in (75, 150, 300)) or str(mapped)
                             logger.info("Order %s: no products; amount %.2f -> credits=%s", order_id, amount_val, out["credits"])
                     except (TypeError, ValueError):
                         pass
@@ -291,15 +291,15 @@ async def _fetch_order_details(order_id: int) -> dict:
                     if text_credits is not None:
                         out["credits"] = text_credits
                         if not out.get("plan_name") and text_credits in _VALID_CREDITS:
-                            out["plan_name"] = str(out["credits"])
+                            out["plan_name"] = _plan_display_name(text_credits, text_credits not in (75, 150, 300)) or str(text_credits)
                         logger.info("Order %s: credits from payload text -> %s", order_id, out["credits"])
                 if out.get("credits") is None:
                     out["credits"] = default_credits
                     if not out.get("plan_name"):
-                        out["plan_name"] = str(default_credits)
+                        out["plan_name"] = _plan_display_name(default_credits, default_credits not in (75, 150, 300)) or str(default_credits)
                     logger.info("Order %s: no products; default credits=%s", order_id, default_credits)
             if not out.get("plan_name") and out.get("credits") is not None and out["credits"] in _VALID_CREDITS:
-                out["plan_name"] = str(out["credits"])
+                out["plan_name"] = _plan_display_name(out["credits"], out["credits"] not in (75, 150, 300)) or str(out["credits"])
             if not out.get("plan_name") or out.get("credits") is None:
                 logger.info(
                     "Order %s: plan_name=%s credits=%s (top keys: %s)",
