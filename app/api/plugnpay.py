@@ -73,6 +73,9 @@ def _credits_from_amount(amount: float) -> Optional[int]:
     return None
 
 
+# Valid credit amounts for our plans (50, 100 prepaid; 75, 150, 300 subscription). Reject quantity=1 etc.
+_VALID_CREDITS = {50, 100, 75, 150, 300}
+
 # Match by subscription/product name (same as payment_logic). Order: specific first so "150" doesn't match "50".
 _CREDITS_BY_NAME = [
     ("buddy_abonnement pro", 300),
@@ -192,12 +195,23 @@ async def _fetch_order_details(order_id: int) -> dict:
                     or first.get("product_name")
                     or ""
                 )
-                if isinstance(plan_name, str) and plan_name.strip():
+                if isinstance(plan_name, str) and plan_name.strip() and not plan_name.strip().isdigit():
                     out["plan_name"] = plan_name.strip()
-                cred = first.get("credits") or first.get("quantity") or first.get("amount")
+                cred = first.get("credits")
+                if cred is None:
+                    try:
+                        qty = first.get("quantity")
+                        if qty is not None and int(qty) in _VALID_CREDITS:
+                            cred = qty
+                    except (TypeError, ValueError):
+                        pass
+                    if cred is None:
+                        cred = first.get("amount")
                 if cred is not None:
                     try:
-                        out["credits"] = int(cred)
+                        c = int(cred)
+                        if c in _VALID_CREDITS:
+                            out["credits"] = c
                     except (TypeError, ValueError):
                         pass
                 if out.get("credits") is None and out.get("plan_name"):
@@ -209,12 +223,14 @@ async def _fetch_order_details(order_id: int) -> dict:
                 meta = payload.get("meta") or order.get("meta")
                 if isinstance(meta, dict):
                     plan_name = meta.get("plan_name") or meta.get("product_name") or meta.get("plan") or meta.get("product") or ""
-                    if isinstance(plan_name, str) and plan_name.strip():
+                    if isinstance(plan_name, str) and plan_name.strip() and not plan_name.strip().isdigit():
                         out["plan_name"] = plan_name.strip()
                     cred = meta.get("credits")
                     if cred is not None and out.get("credits") is None:
                         try:
-                            out["credits"] = int(cred)
+                            c = int(cred)
+                            if c in _VALID_CREDITS:
+                                out["credits"] = c
                         except (TypeError, ValueError):
                             pass
                     if out.get("credits") is None and out.get("plan_name"):
@@ -226,12 +242,14 @@ async def _fetch_order_details(order_id: int) -> dict:
                         meta_obj = json.loads(meta)
                         if isinstance(meta_obj, dict):
                             plan_name = meta_obj.get("plan_name") or meta_obj.get("product_name") or meta_obj.get("plan") or ""
-                            if plan_name:
+                            if plan_name and str(plan_name).strip() and not str(plan_name).strip().isdigit():
                                 out["plan_name"] = str(plan_name).strip()
                             cred = meta_obj.get("credits")
                             if cred is not None and out.get("credits") is None:
                                 try:
-                                    out["credits"] = int(cred)
+                                    c = int(cred)
+                                    if c in _VALID_CREDITS:
+                                        out["credits"] = c
                                 except (TypeError, ValueError):
                                     pass
                     except Exception:
@@ -240,7 +258,7 @@ async def _fetch_order_details(order_id: int) -> dict:
             if not out.get("plan_name") and isinstance(payload, dict):
                 for key in ("name", "title", "description", "product_name", "plan_name"):
                     val = payload.get(key) or order.get(key)
-                    if isinstance(val, str) and val.strip():
+                    if isinstance(val, str) and val.strip() and not val.strip().isdigit():
                         out["plan_name"] = val.strip()
                         break
             # Set credits by subscription name (Buddy_Credits 100, Buddy_abonnement Active, etc.)
@@ -262,7 +280,7 @@ async def _fetch_order_details(order_id: int) -> dict:
                             mapped = _credits_from_amount(amount_val / 100.0)
                         if mapped is not None:
                             out["credits"] = mapped
-                            if not out.get("plan_name"):
+                            if not out.get("plan_name") and mapped in _VALID_CREDITS:
                                 out["plan_name"] = str(out["credits"])
                             logger.info("Order %s: no products; amount %.2f -> credits=%s", order_id, amount_val, out["credits"])
                     except (TypeError, ValueError):
@@ -272,7 +290,7 @@ async def _fetch_order_details(order_id: int) -> dict:
                     text_credits = _credits_from_payload_text(payload) or _credits_from_payload_text(data)
                     if text_credits is not None:
                         out["credits"] = text_credits
-                        if not out.get("plan_name"):
+                        if not out.get("plan_name") and text_credits in _VALID_CREDITS:
                             out["plan_name"] = str(out["credits"])
                         logger.info("Order %s: credits from payload text -> %s", order_id, out["credits"])
                 if out.get("credits") is None:
@@ -280,7 +298,7 @@ async def _fetch_order_details(order_id: int) -> dict:
                     if not out.get("plan_name"):
                         out["plan_name"] = str(default_credits)
                     logger.info("Order %s: no products; default credits=%s", order_id, default_credits)
-            if not out.get("plan_name") and out.get("credits") is not None:
+            if not out.get("plan_name") and out.get("credits") is not None and out["credits"] in _VALID_CREDITS:
                 out["plan_name"] = str(out["credits"])
             if not out.get("plan_name") or out.get("credits") is None:
                 logger.info(
@@ -454,7 +472,7 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
     if not whatsapp_number:
         whatsapp_number = _find_phone_in_dict(body)
 
-    # Credits: from product metadata, custom_fields, or fixed amount
+    # Credits: from product metadata, custom_fields, or fixed amount (only accept valid plan amounts)
     credits = (
         custom_fields.get("credits")
         or data.get("credits")
@@ -462,11 +480,12 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
     )
     if credits is not None:
         try:
-            credits = int(credits)
+            c = int(credits)
+            credits = c if c in _VALID_CREDITS else None
         except (TypeError, ValueError):
             credits = None
 
-    # Plan name
+    # Plan name (reject bare numbers like "1" so we don't use quantity as plan)
     plan_name = (
         custom_fields.get("plan_name")
         or data.get("plan_name")
@@ -475,12 +494,16 @@ def _extract_event_and_data(body: dict) -> tuple[str, dict]:
     if not plan_name and order.get("products"):
         first = order["products"][0] if order["products"] else {}
         plan_name = first.get("title") or first.get("name") or first.get("slug") or ""
+    if plan_name is not None and isinstance(plan_name, str) and plan_name.strip().isdigit():
+        plan_name = None
 
     # Credits: also derive from product name/slug (e.g. atleet-buddy-credits-50 → 50)
     if credits is None and plan_name:
         m = re.search(r"credits[-_]?(\d+)|(\d+)\s*credits", plan_name, re.I)
         if m:
-            credits = int(m.group(1) or m.group(2))
+            c = int(m.group(1) or m.group(2))
+            if c in _VALID_CREDITS:
+                credits = c
 
     # Customer ID from payment provider
     plugnpay_customer_id = (
