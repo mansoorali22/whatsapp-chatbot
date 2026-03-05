@@ -2,15 +2,13 @@
 Payment and subscription logic for Plug & Pay webhook events.
 All operations use the Subscription table; no external API calls.
 
-Plans (matched by substring in plan_name / product title):
-- 50 credits          → prepaid, 50 credits; validity 6 months
-- 100 credits         → prepaid, 100 credits; validity 6 months
-- Subscription Start  → monthly, 75 credits; validity 1 month
-- Subscription Active → monthly, 150 credits; validity 1 month
-- Subscription Pro    → monthly, 300 credits; validity 1 month
-- Trial               → 7 days, max TRIAL_MAX_QUESTIONS; TRIAL_CREDITS
-
-Overlap rules: subscription_end = max(current_end, new_period_end).
+Credits are set by subscription/product name. Supported names (substring match):
+- Eet als een atleet Buddy_abonnement Active (150 credits) → 150, monthly
+- Eet als een atleet Buddy_abonnement Pro (300 credits)    → 300, monthly
+- Eet als een atleet Buddy_abonnement Start (75 credits)  → 75, monthly
+- Eet als een atleet Buddy_Credits 100                    → 100, prepaid (6 months)
+- Eet als een atleet Buddy_Credits 50                     → 50, prepaid (6 months)
+Order: match "100" before "50" so "150" does not match "50".
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -24,19 +22,19 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Plan key (substring match in plan_name) -> (credits, is_monthly)
-# Names: "50 credits", "100 credits", "Subscription Start", "Subscription Active", "Subscription Pro"
+# Match by subscription name (substring). Order matters: 100 before 50 so "150" doesn't match "50".
+# Product names: "Buddy_abonnement Active", "Buddy_abonnement Pro", "Buddy_abonnement Start", "Buddy_Credits 100", "Buddy_Credits 50"
 PLAN_CREDITS = {
-    "start": (75, True),   # Subscription Start
-    "active": (150, True), # Subscription Active
-    "pro": (300, True),    # Subscription Pro
-    "50": (50, False),    # 50 credits (prepaid)
-    "100": (100, False),  # 100 credits (prepaid)
+    "start": (75, True),    # Buddy_abonnement Start (75 credits)
+    "active": (150, True),  # Buddy_abonnement Active (150 credits)
+    "pro": (300, True),     # Buddy_abonnement Pro (300 credits)
+    "100": (100, False),   # Buddy_Credits 100
+    "50": (50, False),     # Buddy_Credits 50
 }
 
 
 def _plan_credits_from_name(plan_name: Optional[str]) -> Tuple[Optional[int], bool]:
-    """Return (credits, is_monthly) for plan_name, or (None, False) if no match."""
+    """Return (credits, is_monthly) for plan_name. Matches product names like Buddy_Credits 100, Buddy_abonnement Active."""
     if not plan_name:
         return None, False
     name = plan_name.lower().strip()

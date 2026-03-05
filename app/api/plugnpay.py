@@ -15,7 +15,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.db.connection import SessionLocal
 from app.core.config import settings
-from app.services.payment_logic import process_webhook_event
+from app.services.payment_logic import process_webhook_event, _plan_credits_from_name
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -73,6 +73,46 @@ def _credits_from_amount(amount: float) -> Optional[int]:
     return None
 
 
+# Match by subscription/product name (same as payment_logic). Order: specific first so "150" doesn't match "50".
+_CREDITS_BY_NAME = [
+    ("buddy_abonnement pro", 300),
+    ("buddy_abonnement active", 150),
+    ("buddy_credits 100", 100),
+    ("buddy_abonnement start", 75),
+    ("buddy_credits 50", 50),
+    ("pro (300 credits)", 300),
+    ("active (150 credits)", 150),
+    ("start (75 credits)", 75),
+    ("100 credit", 100),
+    ("50 credit", 50),
+]
+
+
+def _credits_from_payload_text(obj: Any, depth: int = 0, max_depth: int = 5) -> Optional[int]:
+    """
+    Scan payload for subscription/product name (e.g. Buddy_Credits 100, Buddy_abonnement Active).
+    Sets credits by name so 100-credit plan is not given 50.
+    """
+    if depth > max_depth:
+        return None
+    if isinstance(obj, dict):
+        for v in obj.values():
+            found = _credits_from_payload_text(v, depth + 1, max_depth)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj[:20]:
+            found = _credits_from_payload_text(item, depth + 1, max_depth)
+            if found is not None:
+                return found
+    elif isinstance(obj, str):
+        s = obj.lower()
+        for pattern, credits in _CREDITS_BY_NAME:
+            if pattern in s:
+                return credits
+    return None
+
+
 async def _fetch_order_details(order_id: int) -> dict:
     """
     Fetch order by ID from PlugAndPay API. Returns dict with whatsapp_number, plan_name, credits
@@ -94,7 +134,7 @@ async def _fetch_order_details(order_id: int) -> dict:
         logger.warning("PlugAndPay API fetch skipped: PLUG_N_PAY_API_TOKEN or PLUG_N_PAY_TOKEN not set")
         return out
     path = PLUGANDPAY_ORDER_PATH.format(id=order_id)
-    url = api_url.rstrip("/") + path + "?include=billing"
+    url = api_url.rstrip("/") + path + "?include=billing,order_lines,products"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
@@ -196,21 +236,50 @@ async def _fetch_order_details(order_id: int) -> dict:
                                     pass
                     except Exception:
                         pass
-            # When API returns flat order (no products/meta), derive credits from amount or use default
+            # Plan name from top-level order/payload when no products (name, title, description)
+            if not out.get("plan_name") and isinstance(payload, dict):
+                for key in ("name", "title", "description", "product_name", "plan_name"):
+                    val = payload.get(key) or order.get(key)
+                    if isinstance(val, str) and val.strip():
+                        out["plan_name"] = val.strip()
+                        break
+            # Set credits by subscription name (Buddy_Credits 100, Buddy_abonnement Active, etc.)
+            if out.get("plan_name") and out.get("credits") is None:
+                plan_credits, _ = _plan_credits_from_name(out["plan_name"])
+                if plan_credits is not None:
+                    out["credits"] = plan_credits
+                    logger.info("Order %s: credits from plan name -> %s", order_id, out["credits"])
+            # When API returns flat order (no products/meta), derive credits from amount or scan payload text
             if out.get("credits") is None and isinstance(payload, dict):
+                default_credits = getattr(settings, "DEFAULT_PAYMENT_CREDITS", 50)
                 amount_raw = payload.get("amount") or payload.get("amount_with_tax") or order.get("amount") or order.get("amount_with_tax")
                 if amount_raw is not None:
                     try:
                         amount_val = float(amount_raw)
-                        default_credits = getattr(settings, "DEFAULT_PAYMENT_CREDITS", 50)
-                        # Map amount -> credits if AMOUNT_TO_CREDITS is set (e.g. "9.99:100,4.99:50")
+                        # Map amount -> credits (EUR). If amount looks like cents (>= 100), also try amount/100
                         mapped = _credits_from_amount(amount_val)
-                        out["credits"] = mapped if mapped is not None else default_credits
-                        if not out.get("plan_name"):
-                            out["plan_name"] = str(out["credits"])
-                        logger.info("Order %s: no products; amount %.2f -> credits=%s", order_id, amount_val, out["credits"])
+                        if mapped is None and amount_val >= 100:
+                            mapped = _credits_from_amount(amount_val / 100.0)
+                        if mapped is not None:
+                            out["credits"] = mapped
+                            if not out.get("plan_name"):
+                                out["plan_name"] = str(out["credits"])
+                            logger.info("Order %s: no products; amount %.2f -> credits=%s", order_id, amount_val, out["credits"])
                     except (TypeError, ValueError):
                         pass
+                # If still no credits, scan full payload for "100 credits" / "50 credits" in any text field
+                if out.get("credits") is None:
+                    text_credits = _credits_from_payload_text(payload) or _credits_from_payload_text(data)
+                    if text_credits is not None:
+                        out["credits"] = text_credits
+                        if not out.get("plan_name"):
+                            out["plan_name"] = str(out["credits"])
+                        logger.info("Order %s: credits from payload text -> %s", order_id, out["credits"])
+                if out.get("credits") is None:
+                    out["credits"] = default_credits
+                    if not out.get("plan_name"):
+                        out["plan_name"] = str(default_credits)
+                    logger.info("Order %s: no products; default credits=%s", order_id, default_credits)
             if not out.get("plan_name") and out.get("credits") is not None:
                 out["plan_name"] = str(out["credits"])
             if not out.get("plan_name") or out.get("credits") is None:
