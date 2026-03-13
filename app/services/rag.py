@@ -16,14 +16,14 @@ from app.db.models import ChatLog
 OPENING_MESSAGE_NL = (
     "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
     "Verwacht praktische tips, evidence-based advies en ideeën die je meteen kunt toepassen in je keuken en sport voorbereiding! "
-    "Nieuwsgierig of ik jouw perfecte buddy ben? Je kunt me gratis 5 vragen stellen!\n\n"
+    "Nieuwsgierig of ik jouw perfecte buddy ben? Je kunt me gratis 10 vragen stellen!\n\n"
     "De antwoorden worden automatisch gegenereerd en zijn enkel en alleen gebaseerd op de inhoud van het boek. "
     "Wees er bewust van dat AI fouten kan maken en weet dat wij nooit medische adviezen zullen geven."
 )
 OPENING_MESSAGE_EN = (
     "Hi! 👋 I'm the Eat like an Athlete assistant. I'm happy to answer your questions about sports nutrition, recovery, healthy eating and recipe inspiration. "
     "Expect practical tips, evidence-based advice and ideas you can use straight away in your kitchen and training. "
-    "Curious if I'm your perfect buddy? You can ask me 5 questions for free!\n\n"
+    "Curious if I'm your perfect buddy? You can ask me 10 questions for free!\n\n"
     "Answers are generated automatically and are based solely on the book content. "
     "Please be aware that AI can make mistakes and we will never give medical advice."
 )
@@ -375,19 +375,12 @@ def init_rag_components():
 # GET RESPONSE
 # -----------------------------
 def _split_into_questions(user_input: str) -> list:
-    """Split user message into a list of separate questions. Returns at least one element."""
-    if not user_input or not user_input.strip():
-        return [user_input or ""]
-    if not split_questions_chain:
-        return [user_input.strip()]
-    try:
-        raw = split_questions_chain.invoke({"input": user_input})
-        if not raw or not str(raw).strip():
-            return [user_input.strip()]
-        lines = [s.strip() for s in str(raw).strip().split("\n") if s.strip()]
-        return lines if lines else [user_input.strip()]
-    except Exception:
-        return [user_input.strip()]
+    """
+    Return the user message as a single question.
+    The multi-question splitting chain is disabled for now to avoid confusing numbered answers
+    (e.g. '1. refusal' + '2. real answer') when the model over-splits a single question.
+    """
+    return [user_input.strip() if user_input else ""]
 
 
 def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_message: bool = False):
