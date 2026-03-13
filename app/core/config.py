@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # -------------------
     TRIAL_DAYS: int = 7
     TRIAL_MAX_QUESTIONS: int = 10
-    TRIAL_CREDITS: int = 5
+    TRIAL_CREDITS: int = 10
     # Show trial warning when user reaches this question (at 7th question = after 6 answered)
     TRIAL_WARNING_AT_QUESTION: int = 7
     UPGRADE_LINK: str = "https://iamafoodie.nl/atleet-buddy"
