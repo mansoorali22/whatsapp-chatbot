@@ -46,28 +46,29 @@ REFUSAL_MESSAGE = (
 )  # fallback bilingual
 
 
+_REFUSAL_SENTENCE_PATTERNS = [
+    r"Unfortunately,?\s*I (?:can(?:'|’)?t|cannot) help you with this question[^.]*\.",
+    r"However,?\s*I(?:'|’)?m happy to help (?:you )?with questions about sports nutrition!?",
+    r"Helaas kan ik je bij deze vraag niet helpen[^.]*\.",
+    r"Wel help ik je graag (?:verder )?met vragen over sportvoeding!?",
+    r"I don(?:'|’)?t know\.?\s*This is outside the book(?:'|’)?s context\.?",
+    r"Ik weet het niet\.?\s*Dit is buiten de context van het boek\.?",
+]
+
+
 def _strip_refusal_from_answer(answer: str) -> str:
-    """Remove refusal phrases and 'page number not in index' if the model wrongly added them."""
-    if not answer or len(answer.strip()) < 20:
+    """
+    Remove refusal phrases that the model may have appended despite having content,
+    plus clean 'page number not in index' artifacts. Idempotent.
+    Keeps the substantive parts of the answer intact.
+    """
+    if not answer:
         return answer
-    # Refusal phrases that must not appear after we have relevant excerpts
-    refusal_tails = [
-        "\n\nI don't know. This is outside the book's context.",
-        "\nI don't know. This is outside the book's context.",
-        "\n\nIk weet het niet. Dit is buiten de context van het boek.",
-        "\nIk weet het niet. Dit is buiten de context van het boek.",
-        "\n\nUnfortunately, I can't help you with this question.",
-        "\n\nHelaas kan ik je bij deze vraag niet helpen.",
-    ]
     out = answer
-    for tail in refusal_tails:
-        if tail in out:
-            out = out.replace(tail, "").strip()
-    for old in ("I don't know. This is outside the book's context.", "Ik weet het niet. Dit is buiten de context van het boek."):
-        if out.endswith(old):
-            out = out[: -len(old)].strip()
-            break
-    # Remove "page number not in index" / "pagina nummer niet in index" (never show to user)
+    # Sweep all known refusal sentences anywhere in the text (not just trailing).
+    for pat in _REFUSAL_SENTENCE_PATTERNS:
+        out = re.sub(pat, "", out, flags=re.IGNORECASE)
+    # Clean stale "page number not in index" artifacts (never shown to user)
     for bad in (
         "(zie pagina nummer niet in index)",
         "(page number not in index)",
@@ -75,12 +76,47 @@ def _strip_refusal_from_answer(answer: str) -> str:
         " page number not in index",
     ):
         if bad in out:
-            out = out.replace(bad, "").replace("  ", " ").strip()
-            if out.endswith("()."):
-                out = out[:-3].strip()
-            elif out.endswith("()"):
-                out = out[:-2].strip()
+            out = out.replace(bad, "")
+    # Tidy: collapse triple+ newlines, double spaces, dangling empty parens
+    out = re.sub(r"\(\s*\)\.?", "", out)
+    out = re.sub(r"[ \t]+", " ", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    out = out.strip()
+    # If we accidentally stripped everything (refusal-only message), return original
     return out if out else answer
+
+
+def _dedupe_paragraphs(text: str) -> str:
+    """
+    Remove consecutive identical (or near-identical) paragraphs and identical
+    consecutive sentences. Defends against the 'same answer twice' issue.
+    """
+    if not text:
+        return text
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    deduped_paras = []
+    for p in paragraphs:
+        norm = re.sub(r"\s+", " ", p).strip().lower()
+        if deduped_paras:
+            prev_norm = re.sub(r"\s+", " ", deduped_paras[-1]).strip().lower()
+            if norm == prev_norm:
+                continue
+        deduped_paras.append(p)
+    out = "\n\n".join(deduped_paras)
+    # Sentence-level dedupe within each paragraph
+    def _dedupe_sentences(par: str) -> str:
+        sents = re.split(r"(?<=[.!?])\s+", par)
+        seen_consecutive = None
+        kept = []
+        for s in sents:
+            key = re.sub(r"\s+", " ", s).strip().lower()
+            if key and key == seen_consecutive:
+                continue
+            seen_consecutive = key
+            kept.append(s)
+        return " ".join(kept)
+    out = "\n\n".join(_dedupe_sentences(p) for p in out.split("\n\n"))
+    return out.strip()
 
 
 def _message_suggests_dutch(user_message: str) -> bool:
@@ -141,15 +177,49 @@ def _has_english_cues(user_message: str) -> bool:
     return any(c in msg for c in english_cues)
 
 
-def _refusal_for_language(user_input: str) -> str:
-    """Return refusal message in Dutch, English, or both only when user mixes languages."""
-    dutch = _use_dutch_page_word(user_input or "")
-    english = _has_english_cues(user_input or "")
-    if dutch and not english:
-        return REFUSAL_MESSAGE_NL
-    if english and not dutch:
-        return REFUSAL_MESSAGE_EN
-    return REFUSAL_MESSAGE_EN + "\n\n" + REFUSAL_MESSAGE_NL
+def _detect_language(user_input: str, chat_history: list | None = None) -> str:
+    """
+    Decide reply language: 'nl' or 'en'. Single source of truth so we never mix
+    or stack languages. Order:
+      1. Strong cues in current message
+      2. Most recent user message in chat history with clear cues
+      3. settings.DEFAULT_LANGUAGE (defaults to Dutch since the book is Dutch)
+    """
+    msg = (user_input or "").lower().strip()
+    if msg:
+        nl = _use_dutch_page_word(user_input)
+        en = _has_english_cues(user_input)
+        if nl and not en:
+            return "nl"
+        if en and not nl:
+            return "en"
+    # Walk recent chat history (newest last) looking for an unambiguous cue
+    if chat_history:
+        for m in reversed(chat_history):
+            content = getattr(m, "content", "") or ""
+            if not content:
+                continue
+            # Only consider human messages (HumanMessage class) — fall back gracefully
+            if m.__class__.__name__ != "HumanMessage":
+                continue
+            nl = _use_dutch_page_word(content)
+            en = _has_english_cues(content)
+            if nl and not en:
+                return "nl"
+            if en and not nl:
+                return "en"
+    default = (getattr(settings, "DEFAULT_LANGUAGE", "") or "").lower()
+    if default in ("nl", "dutch", "nederlands"):
+        return "nl"
+    if default in ("en", "english", "engels"):
+        return "en"
+    # Book is Dutch — safer default than bilingual stacking
+    return "nl"
+
+
+def _refusal_for_language(user_input: str, chat_history: list | None = None) -> str:
+    """Return refusal in a SINGLE language. Never bilingual."""
+    return REFUSAL_MESSAGE_NL if _detect_language(user_input, chat_history) == "nl" else REFUSAL_MESSAGE_EN
 
 
 def _user_asks_for_reference(user_message: str) -> bool:
@@ -336,8 +406,20 @@ def init_rag_components():
             (
                 "system",
                 "Rewrite the user message into a standalone search query for finding relevant book content. "
-                "Use chat history for context. Output the query in English only. "
-                "IMPORTANT: For the same topic, always use the same English search terms so retrieval returns the same excerpts (and same page numbers) whether the user asked in Dutch or English. Examples: recepten/recipes → 'recipes'; dagmenu/daily menu → 'daily menu'; voeding aanpassen/wedstrijd → 'competition nutrition' or 'training day menu'. So 'waar vind ik de recepten?' and 'on which page are the recipes?' must both become a query like 'recipes where in book' so the same pages are found. Return ONLY the rewritten query."
+                "Use chat history for context. Output the query in English only. Return ONLY the rewritten query, nothing else.\n\n"
+                "FOLLOW-UP HANDLING (critical): If the user message is a follow-up — it uses pronouns ('it','that','this','die','het','dat','deze','dit'), or starts with 'and …'/'en …'/'wat dan met …'/'and what about …', or is short and clearly continues the previous topic — you MUST resolve it against the most recent topic in chat history before producing the query. Example: previous turn was about protein for older adults and the user now writes 'En voor jongeren?' → rewrite to 'protein needs for young athletes'.\n\n"
+                "TOPIC NORMALIZATION (use the same English terms regardless of source language so retrieval is consistent):\n"
+                "  • verzadigd vet / saturated fat → 'saturated fat health effects'\n"
+                "  • onverzadigd vet / gezonde oliën / unsaturated / healthy oils → 'unsaturated fats healthy oils'\n"
+                "  • eiwit / proteïne / protein → 'protein intake recovery'\n"
+                "  • koolhydraten / carbs → 'carbohydrates endurance'\n"
+                "  • herstel / recovery → 'recovery nutrition after training'\n"
+                "  • recept / recepten / recipe / recipes / inspiratie → 'recipes meal ideas'\n"
+                "  • dagmenu / daily menu / sample day → 'daily menu sample meal plan'\n"
+                "  • wedstrijd / competition → 'competition day nutrition'\n"
+                "  • hydratatie / hydration / drinken → 'hydration fluids athletes'\n"
+                "  • oudere / 80 / senior / older athlete → 'protein nutrition older adults'\n"
+                "Preserve any specific numbers, ages, weights, or sport names from the user's message in the query."
             ),
             MessagesPlaceholder("chat_history"),
             ("human", "{input}")
@@ -346,21 +428,43 @@ def init_rag_components():
         | StrOutputParser()
     )
 
-    # 4. Answer generation (validate-then-answer)
+    # 4. Answer generation — friendly, concise, single-language
+    max_words = getattr(settings, "ANSWER_MAX_WORDS", 120)
+    enable_clarify = getattr(settings, "ENABLE_CLARIFY_QUESTION", True)
+    enable_followup = getattr(settings, "ENABLE_FOLLOWUP_SUGGESTIONS", True)
+
+    answer_system_prompt = (
+        f"You are the friendly buddy of the book \"{settings.BOOK_TITLE}\". You speak like a knowledgeable, warm friend who happens to know the book inside out. Not a textbook, not a lecturer.\n\n"
+        "You will receive excerpts from the book labeled like [page N] or [section N], plus the recent chat history.\n\n"
+        "## HARD RULES (in priority order)\n"
+        "1. **LANGUAGE LOCK.** Write the ENTIRE reply in {language} ('nl' = Dutch, 'en' = English). Never mix languages. If the source excerpts are in another language, translate them. Do NOT include any sentence in the other language, not even a refusal or disclaimer.\n"
+        "2. **ANSWER ONLY WHAT WAS ASKED.** If the user asks about protein, talk about protein. Do NOT volunteer magnesium, calcium, vitamins, fiber, hydration tips, or any nutrient/topic the user did not ask about. Resist the urge to give a 'complete picture'.\n"
+        f"3. **BE CONCISE.** Target {max_words} words or fewer. Only go longer when the user explicitly asks for a meal plan, sample day, or detailed example.\n"
+        "4. **REALISTIC PORTIONS FOR ONE PERSON, ONE MOMENT.** When you mention amounts, give them for a single person and a single meal/snack. Do NOT stack a full day's worth of food into one example. Match portions to the user's stated context (age, weight, training type) when known from chat history.\n"
+        "5. **PERSONALIZE FROM HISTORY.** If the user has shared personal info in earlier messages (age, weight, sport, training frequency, goals), use it. If they ask about 'protein for me', use what you know about them.\n"
+        "6. **CONSISTENCY WITH PRIOR ANSWERS.** If your earlier answers in this same chat differ from what you'd say now (e.g. 'avoid protein right before training' vs 'take protein after training'), call out the distinction in one short sentence so the user is not confused.\n"
+        + (
+            "7. **CLARIFY WHEN TRULY VAGUE.** If the question is too vague to answer well (e.g. 'what should I eat?' with zero context) AND chat history has no clarifying info (sport, time of day, weight, goal), ask exactly ONE short clarifying question and stop. Never ask more than one. Never ask if the question is already specific enough or if the answer is obvious from context.\n"
+            if enable_clarify else ""
+        )
+        + (
+            "8. **OPTIONAL FOLLOW-UP.** After a substantive answer, you MAY end with ONE short suggestion of a natural follow-up the user might want next (e.g. 'Wil je dat ik dit toepas op jouw trainingsdag?'). Only when the topic naturally invites depth — never on greetings, thanks, refusals, or when you just asked a clarifying question.\n"
+            if enable_followup else ""
+        )
+        + "9. **REFERENCES.** When the user asks for a reference / source / page (words like 'page','pagina','bladzijde','bron','referentie','where','waar','source'), include the page/section numbers from the excerpt labels. Use 'page N' in English, 'pagina N' in Dutch. Otherwise do NOT add page numbers.\n"
+        "10. **DISCLAIMER.** Only when you give specific nutrient amounts or portion sizes, add ONE short sentence in {language}: Dutch: 'Dit is algemene informatie; voor persoonlijk advies kun je een (sport)diëtist raadplegen.' English: 'This is general information; for personal advice you can consult a (sports) dietitian.'\n"
+        "11. **REFUSE ONLY WHEN TRULY OFF-TOPIC.** Off-topic = politics, code, medical diagnosis, anything unrelated to food, eating, sport, recovery, recipes, hydration, age groups, body composition. Anything about nutrition — including for older adults, beginners, casual exercisers, or people with general health goals — is IN scope. The book covers sports nutrition broadly; do NOT refuse just because the user is not a competitive athlete.\n"
+        "12. **REFUSAL FORMAT.** When (and only when) you must refuse, reply with EXACTLY one of these single lines and nothing else:\n"
+        "    - Dutch: \"Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!\"\n"
+        "    - English: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\"\n"
+        "    Use the line that matches {language}. Never output both. Never combine refusal with substantive content in the same reply.\n"
+        "13. **NO META.** Never mention 'excerpts', 'chunks', 'context', 'the system', or that you have 'no information'. If you can't answer, use the refusal in rule 12.\n"
+    )
+
     answer_chain = (
         ChatPromptTemplate.from_messages([
-            (
-                "system",
-                f"You are the {settings.BOOK_TITLE} AI assistant. "
-                "You will receive excerpts from the book. Each excerpt has a label like [page N] or [section N]. "
-                "RULES: 1) Answer ONLY from the excerpts. 2) Answer in the SAME LANGUAGE as the user (Dutch or English). "
-                "3) If excerpts contain relevant info (even partial), you MUST answer fully: summarize the actual content (e.g. what an ideal daily menu looks like—meals, examples, timing). Give the substance from the excerpts so the user gets a complete answer. "
-                "4) When the user does NOT ask for a reference/source/page: do not add page numbers—just give the content. "
-                "5) When the user DOES ask for a reference, source, or page numbers (e.g. 'give reference', 'with reference', 'include source', 'which page', 'welke pagina', 'waar vind ik', 'where can I find', 'give me the page', 'met bron', 'met referentie', 'cite', 'page number', 'bladzijde', in the same message or a follow-up), you MUST include the page/section numbers from the excerpt labels in your answer. Use 'page N' in English (e.g. 'See page 42, 43.') and 'pagina N' in Dutch (e.g. 'Zie pagina 42, 43.'). List all relevant pages from the excerpts you used. "
-                "6) ONLY when excerpts have NOTHING relevant to the question, reply with exactly: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\" then \"Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!\". Never mix: if you have relevant content, answer only that; if none, use only this refusal. "
-                "7) When your answer gives specific nutritional advice (e.g. amounts of food, grams of protein, portions like '5 eggs', '400g quark'), add a short disclaimer in the same language as the answer. Dutch: 'Dit is algemene informatie; voor persoonlijk advies kun je een (sport)diëtist raadplegen.' English: 'This is general information; for personal advice you can consult a (sports) dietitian.' Keep the disclaimer to one sentence at the end. "
-            ),
-            ("system", "Context excerpts:\n{context}"),
+            ("system", answer_system_prompt),
+            ("system", "Context excerpts from the book:\n{context}"),
             MessagesPlaceholder("chat_history"),
             ("human", "{input}")
         ])
@@ -387,24 +491,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
     if not all([llm, retriever, intent_chain, split_questions_chain, rewrite_chain, answer_chain]):
         init_rag_components()
 
-    # 1. Intent check
-    intent = intent_chain.invoke({"input": user_input}).strip().upper()
-    if "GREETING" in intent:
-        reply = OPENING_MESSAGE_NL if _use_dutch_page_word(user_input) else OPENING_MESSAGE_EN
-        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=reply, response_type="greeting", chunks_used=[], history_snapshot=[]))
-        db.commit()
-        return reply
-    if "THANKS" in intent:
-        if _use_dutch_page_word(user_input):
-            reply = "Graag gedaan! Stel gerust nog een vraag over het boek."
-        else:
-            reply = "You're welcome! Ask me anything else about the book."
-        final = _prepend_welcome_if_first(reply, is_first_message, user_input)
-        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=final, response_type="thanks", chunks_used=[], history_snapshot=[]))
-        db.commit()
-        return final
-
-    # 2. Load chat history
+    # Load chat history early so language detection can use it for short follow-ups.
     past_logs = (
         db.query(ChatLog)
         .filter(ChatLog.whatsapp_number == whatsapp_number)
@@ -417,6 +504,27 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
     for log in reversed(past_logs):
         chat_history.append(HumanMessage(content=log.user_message))
         chat_history.append(AIMessage(content=log.bot_response))
+
+    # Single source of truth for the reply language.
+    language_code = _detect_language(user_input, chat_history)
+    language_full = "Dutch" if language_code == "nl" else "English"
+
+    # 1. Intent check
+    intent = intent_chain.invoke({"input": user_input}).strip().upper()
+    if "GREETING" in intent:
+        reply = OPENING_MESSAGE_NL if language_code == "nl" else OPENING_MESSAGE_EN
+        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=reply, response_type="greeting", chunks_used=[], history_snapshot=[]))
+        db.commit()
+        return reply
+    if "THANKS" in intent:
+        if language_code == "nl":
+            reply = "Graag gedaan! Stel gerust nog een vraag over het boek."
+        else:
+            reply = "You're welcome! Ask me anything else about the book."
+        final = _prepend_welcome_if_first(reply, is_first_message, user_input)
+        db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=final, response_type="thanks", chunks_used=[], history_snapshot=[]))
+        db.commit()
+        return final
 
     questions = _split_into_questions(user_input)
 
@@ -447,13 +555,13 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             if not relevant_docs and docs_with_scores:
                 relevant_docs = list(docs_with_scores)[:3]
             if not relevant_docs:
-                parts.append(_refusal_for_language(q))
+                parts.append(_refusal_for_language(q, chat_history))
             else:
                 context_text = "\n\n".join(
                     f"Excerpt [{_excerpt_label(doc.metadata)}]: {doc.page_content}"
                     for doc, _ in relevant_docs
                 )
-                part = answer_chain.invoke({"context": context_text, "chat_history": [], "input": q})
+                part = answer_chain.invoke({"context": context_text, "chat_history": [], "input": q, "language": language_full})
                 part = _strip_refusal_from_answer(part)
                 part = _localize_page_citations(q, part)
                 all_used_docs.extend(doc.metadata for doc, _ in relevant_docs)
@@ -491,8 +599,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                     docs_with_scores = _do_retrieval()
                 except Exception as retry_e:
                     print(f"❌ Retry failed: {retry_e}")
-                    answer = _refusal_for_language(user_input)
-                    answer = _prepend_welcome_if_first(answer, is_first_message, user_input)
+                    answer = _refusal_for_language(user_input, chat_history)
                     db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", chunks_used=[], history_snapshot=[]))
                     db.commit()
                     return answer
@@ -512,7 +619,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
         # 5. Answer phase
         if not relevant_docs:
-            answer = _refusal_for_language(user_input)
+            answer = _refusal_for_language(user_input, chat_history)
             response_type = "refused"
             used_docs = []
         else:
@@ -536,11 +643,14 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             answer = answer_chain.invoke({
                 "context": context_text,
                 "chat_history": chat_history,
-                "input": user_input
+                "input": user_input,
+                "language": language_full,
             })
 
             # If model wrongly appended refusal despite having relevant excerpts, strip it and keep the useful part
             answer = _strip_refusal_from_answer(answer)
+            # Remove duplicated paragraphs/sentences (defends against the 'same answer twice' issue)
+            answer = _dedupe_paragraphs(answer)
             # Use Dutch 'pagina' instead of 'page' when user wrote in Dutch
             answer = _localize_page_citations(user_input, answer)
 
@@ -593,4 +703,8 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         )
         db.commit()
 
+    # Do NOT stack the welcome intro on top of a refusal — that produces a confusing
+    # "intro + we can't help" sandwich on the user's very first message.
+    if response_type == "refused":
+        return answer
     return _prepend_welcome_if_first(answer, is_first_message, user_input)

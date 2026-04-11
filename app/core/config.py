@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     # Database
     # -------------------
     DATABASE_URL: str = "postgresql://temp:temp@localhost/temp"
-    MAX_CHAT_LOG_MESSAGES: int = 5
+    # Number of recent chat logs loaded as context (also used for the personal-info memory window).
+    MAX_CHAT_LOG_MESSAGES: int = 10
     
     # -------------------
     # WhatsApp
@@ -85,6 +86,11 @@ class Settings(BaseSettings):
     RETRIEVAL_TOP_K: int = 8
     SIMILARITY_THRESHOLD: float = 1.0
     MAX_TOKENS_RESPONSE: int = 600
+    # Conversation tuning (overridable via env)
+    ANSWER_MAX_WORDS: int = 120
+    ENABLE_FOLLOWUP_SUGGESTIONS: bool = True
+    ENABLE_CLARIFY_QUESTION: bool = True
+    INVITE_REFERENCE_TIP: bool = False
     
     # -------------------
     # Book Info
