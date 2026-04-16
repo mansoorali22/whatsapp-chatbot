@@ -16,14 +16,14 @@ from app.db.models import ChatLog
 OPENING_MESSAGE_NL = (
     "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
     "Verwacht praktische tips, evidence-based advies en ideeën die je meteen kunt toepassen in je keuken en sport voorbereiding! "
-    "Nieuwsgierig of ik jouw perfecte buddy ben? Je kunt me gratis 10 vragen stellen!\n\n"
+    "Nieuwsgierig of ik jouw perfecte buddy ben? Je kunt me gratis 15 vragen stellen!\n\n"
     "De antwoorden worden automatisch gegenereerd en zijn enkel en alleen gebaseerd op de inhoud van het boek. "
     "Wees er bewust van dat AI fouten kan maken en weet dat wij nooit medische adviezen zullen geven."
 )
 OPENING_MESSAGE_EN = (
     "Hi! 👋 I'm the Eat like an Athlete assistant. I'm happy to answer your questions about sports nutrition, recovery, healthy eating and recipe inspiration. "
     "Expect practical tips, evidence-based advice and ideas you can use straight away in your kitchen and training. "
-    "Curious if I'm your perfect buddy? You can ask me 10 questions for free!\n\n"
+    "Curious if I'm your perfect buddy? You can ask me 15 questions for free!\n\n"
     "Answers are generated automatically and are based solely on the book content. "
     "Please be aware that AI can make mistakes and we will never give medical advice."
 )

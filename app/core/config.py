@@ -104,10 +104,10 @@ class Settings(BaseSettings):
     # Trial & plans
     # -------------------
     TRIAL_DAYS: int = 7
-    TRIAL_MAX_QUESTIONS: int = 10
-    TRIAL_CREDITS: int = 10
+    TRIAL_MAX_QUESTIONS: int = 15
+    TRIAL_CREDITS: int = 15
     # Show trial warning when user reaches this question (at 7th question = after 6 answered)
-    TRIAL_WARNING_AT_QUESTION: int = 7
+    TRIAL_WARNING_AT_QUESTION: int = 12
     UPGRADE_LINK: str = "https://iamafoodie.nl/atleet-buddy"
     TRIAL_WARNING_MESSAGE_NL: str = (
         "Je free trial eindigt bijna omdat je het maximaal aantal vragen hebt gesteld. "
