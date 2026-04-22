@@ -46,6 +46,14 @@ REFUSAL_MESSAGE = (
 )  # fallback bilingual
 
 
+_REFUSAL_HISTORY_MARKERS = [
+    "Unfortunately, I can't help you with this question",
+    "Helaas kan ik je bij deze vraag niet helpen",
+    "I don't know. This is outside the book",
+    "Ik weet het niet. Dit is buiten de context",
+]
+
+
 _REFUSAL_SENTENCE_PATTERNS = [
     r"Unfortunately,?\s*I (?:can(?:'|’)?t|cannot) help you with this question[^.]*\.",
     r"However,?\s*I(?:'|’)?m happy to help (?:you )?with questions about sports nutrition!?",
@@ -459,6 +467,7 @@ def init_rag_components():
         "    - English: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\"\n"
         "    Use the line that matches {language}. Never output both. Never combine refusal with substantive content in the same reply.\n"
         "13. **NO META.** Never mention 'excerpts', 'chunks', 'context', 'the system', or that you have 'no information'. If you can't answer, use the refusal in rule 12.\n"
+        "14. **HISTORY INDEPENDENCE.** Each question is independent. Even if previous answers in the chat history refused a topic, you MUST still answer the current question based on the current excerpts provided. Never refuse simply because a prior turn refused.\n"
     )
 
     answer_chain = (
@@ -502,6 +511,11 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
     chat_history = []
     for log in reversed(past_logs):
+        # Skip refused exchanges — prior refusals in history bias the LLM toward refusing future questions
+        if log.response_type == "refused":
+            continue
+        if any(marker in (log.bot_response or "") for marker in _REFUSAL_HISTORY_MARKERS):
+            continue
         chat_history.append(HumanMessage(content=log.user_message))
         chat_history.append(AIMessage(content=log.bot_response))
 
