@@ -1,6 +1,8 @@
 import os
+import re
 import sys
 from pathlib import Path
+from bisect import bisect_right
 from sqlalchemy import create_engine, text
 
 # --- PATH FIX: Ensures 'app' is findable ---
@@ -19,6 +21,122 @@ from app.utils.logger import setup_logging, get_logger
 
 setup_logging()
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LANDMARK-BASED PAGE MAPPING
+# ---------------------------------------------------------------------------
+# These are section headings and recipe titles from the book's own table of
+# contents and recipe index ("Receptenregister"), paired with their real page
+# numbers.  When ingesting, we locate each landmark in the full text to build
+# a (character-position → page-number) mapping.  Each chunk is then assigned
+# the page of the nearest preceding landmark.
+# ---------------------------------------------------------------------------
+_BOOK_LANDMARKS = [
+    # --- Table of Contents sections ---
+    ("Altijd op zoek naar verbetering", 6),
+    ("Haal het optimale uit jezelf", 8),
+    ("Welk personage ligt het dichtst bij jou", 12),
+    ("Genoeg eten is essentieel", 18),
+    ("Basisvoedingsmiddelen voor prestatie en herstel", 29),
+    ("De verschillende brandstoffen voor je lichaam", 29),
+    ("De noodzaak van eiwitten", 36),
+    ("Je kunt niet lang zonder drinken", 49),
+    ("Rondom het sporten heb je andere voeding nodig", 56),
+    ("Eten voor het sporten", 56),
+    ("Drinken voor het sporten", 83),
+    ("Eten tijdens het sporten", 86),
+    ("Drinken tijdens het sporten", 96),
+    ("Eten en drinken na het sporten", 105),
+    ("voor de laatste paar procent", 128),
+    ("Bewezen werkzame supplementen", 135),
+    ("Voedingssupplementen: Als je iets tekort komt", 135),
+    ("Prestatiebevorderende supplementen", 142),
+    ("Gewichtsverlies en gewichtstoename", 150),
+    ("Verstoord eetgedrag", 155),
+    ("Hoogte, kou en hitte", 157),
+    ("Voeding op reis", 161),
+    ("Voeding tijdens blessures", 162),
+    ("De vegetarische of veganistisch sporter", 164),
+    ("Hoe eten de atleten", 178),
+    ("Schrijven als een atleet", 188),
+    ("Over de auteurs", 189),
+    # --- Recipe index entries (real page numbers from the book's Receptenregister) ---
+    # Use the uppercase recipe headers (e.g. "BANANEN-RICOTTA PANNENKOEKJES") to
+    # match the actual recipe content, not the title listing that precedes them.
+    ("QUINOA PARFAIT", 47),
+    ("VRUCHTENKWARK", 47),
+    ("BANANEN-RICOTTA PANNENKOEKJES", 47),
+    ("SPORTOMELET", 48),
+    ("TEFFPAP", 48),
+    ("Infused water", 54),
+    ("CLOUDIES", 72),
+    ("COUSCOUSSALADE  VOOR", 79),
+    ("SOBA NOEDELS", 80),
+    ("BULGURSALADE MET KIP", 80),
+    ("WRAPS MET ZALM", 81),
+    ("PASTA MET TEMPEH", 81),
+    ("Kwarktaart", 111),
+    ("CHOCOLADEMELK    VOOR", 116),
+    ("Edamame hummus", 113),
+    ("BONENSCHOTEL", 121),
+    ("Pasta met zalm", 120),
+    ("THAISE KIPCURRY", 120),
+    ("SPORTQUICHE", 112),
+    ("Vruchtenijs", 111),
+    ("OVERNIGHT APPELTAART-OATS", 66),
+    ("CHUNKY MONKEY OATS", 66),
+    ("Homemade sportgranola", 67),
+    ("VANILLE RIJSTEBRIJ", 71),
+    ("Boekweitpannenkoek", 66),
+    # Vegetarian recipes
+    ("ROEREI ZONDER EI", 167),
+    ("SPORTFALAFEL", 170),
+    ("KNAPPERIGE TEMPEH UIT DE OVEN", 172),
+]
+
+
+def _build_page_map(full_text: str):
+    """
+    Locate each landmark in *full_text* (first occurrence only, skipping the
+    recipe-index section at the end) and return a sorted list of
+    (char_position, page_number) tuples.
+    """
+    # Ignore the recipe index near the end (it repeats recipe names with page
+    # numbers, which would create duplicate matches at the wrong position).
+    index_start = full_text.find("Receptenregister Dranken")
+    if index_start == -1:
+        index_start = len(full_text)
+
+    entries = []
+    for title, page in _BOOK_LANDMARKS:
+        # Replace runs of whitespace in the landmark with a flexible \s+ pattern
+        # so "COUSCOUSSALADE  VOOR" matches "COUSCOUSSALADE\n\nVOOR" etc.
+        pattern = r"\s+".join(re.escape(w) for w in title.split())
+        m = re.search(pattern, full_text[:index_start], re.IGNORECASE)
+        if m:
+            entries.append((m.start(), page))
+        else:
+            logger.debug(f"Landmark not found (skipped): {title}")
+
+    # Sort by position and deduplicate
+    entries.sort(key=lambda x: x[0])
+    logger.info(f"📍 Located {len(entries)} of {len(_BOOK_LANDMARKS)} page landmarks in text")
+    return entries
+
+
+def _page_for_position(page_map: list, pos: int, fallback_page: int = 1) -> int:
+    """
+    Given a sorted page_map [(pos, page), ...] and a character position,
+    return the page number of the nearest preceding landmark.
+    """
+    if not page_map:
+        return fallback_page
+    positions = [p for p, _ in page_map]
+    idx = bisect_right(positions, pos) - 1
+    if idx < 0:
+        return fallback_page
+    return page_map[idx][1]
 
 def ingest_book_to_pgvector_only(file_path: str):
     """
@@ -74,13 +192,24 @@ def ingest_book_to_pgvector_only(file_path: str):
         except Exception as e:
             logger.warning(f"⚠️ Cleanup skipped (likely first run): {e}")
 
-    # 5. Prepare LangChain Documents (assign estimated page so every answer can cite "page N")
-    total_chunks = len(chunks)
-    total_pages = getattr(settings, "BOOK_TOTAL_PAGES", 250) or 250
+    # 5. Prepare LangChain Documents with real page numbers from landmarks
+    # Build a (position → page) map from the book's own TOC and recipe index
+    full_text = "\n\n".join(doc.page_content for doc in documents)
+    page_map = _build_page_map(full_text)
+
+    # Track cumulative character offset so we can map each chunk back to the
+    # full text and look up the correct page.
+    chunk_offset = 0
     pgvector_documents = []
     for i, chunk in enumerate(chunks):
-        # Spread chunks across the book so each has an estimated page number
-        page = 1 + round((i * (total_pages - 1)) / max(1, total_chunks - 1)) if total_chunks > 1 else 1
+        # Find where this chunk starts in the full text (search from last offset)
+        pos = full_text.find(chunk.page_content[:80], chunk_offset)
+        if pos == -1:
+            # Fallback: try from the beginning (overlap can cause skips)
+            pos = full_text.find(chunk.page_content[:80])
+        if pos != -1:
+            chunk_offset = pos
+        page = _page_for_position(page_map, chunk_offset)
         pgvector_documents.append(Document(
             page_content=chunk.page_content,
             metadata={
