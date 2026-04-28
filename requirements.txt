@@ -41,6 +41,7 @@ ormsgpack==1.12.2
 pgvector==0.3.6
 psycopg==3.3.2
 psycopg-binary==3.3.2
+PyMuPDF==1.25.5
 psycopg-pool==3.3.0
 psycopg2-binary==2.9.11
 pydantic==2.12.5
