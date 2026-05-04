@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, Text, JSON, Index, Boolean, ForeignKey
+from sqlalchemy import Column, String, Integer, Float, DateTime, Text, JSON, Index, Boolean, ForeignKey
 from sqlalchemy.sql import func
 from .connection import Base
 
@@ -54,7 +54,13 @@ class ChatLog(Base):
     # --- Your Strict Mode A Audit Fields ---
     response_type = Column(String(50)) # 'answered', 'refused', 'error'
     chunks_used = Column(JSON, nullable=True) # IDs and metadata of the PDF chunks
-    
+
+    # --- B3: Token & Cost Tracking ---
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Float, nullable=True)
+    model = Column(String(128), nullable=True)
+
     # --- Timestamps ---
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

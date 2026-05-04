@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from .auth import router as auth_router
 from .users import router as users_router
 from .audit import router as audit_router
+from .usage import router as usage_router
 
 router = APIRouter()
 
@@ -19,3 +20,6 @@ router.include_router(users_router, prefix="/users", tags=["Admin Users"])
 
 # /admin/audit
 router.include_router(audit_router, prefix="/audit", tags=["Admin Audit"])
+
+# /admin/usage/summary, /admin/usage/daily, /admin/usage/per-user, /admin/usage/dashboard
+router.include_router(usage_router, tags=["Admin Usage"])
