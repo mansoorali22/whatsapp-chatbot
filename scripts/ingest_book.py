@@ -41,8 +41,9 @@ def _load_pdf_pages(file_path: str) -> list[Document]:
                 page_content=page_text,
                 metadata={"page": i + 1}  # 1-based page number
             ))
+    total = doc.page_count
     doc.close()
-    logger.info(f"📄 Extracted text from {len(pages)} pages (of {doc.page_count} total)")
+    logger.info(f"📄 Extracted text from {len(pages)} pages (of {total} total)")
     return pages
 
 

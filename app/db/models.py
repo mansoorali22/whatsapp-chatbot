@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, Text, JSON, Index, Boolean
+from sqlalchemy import Column, String, Integer, DateTime, Text, JSON, Index, Boolean, ForeignKey
 from sqlalchemy.sql import func
 from .connection import Base
 
@@ -60,4 +60,33 @@ class ChatLog(Base):
 
 # High-performance index for finding a specific user's history
 Index('idx_user_history', ChatLog.whatsapp_number, ChatLog.created_at)
+
+
+# ===========================
+# Admin Dashboard Models
+# ===========================
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    display_name = Column(String(100), nullable=True)
+    role = Column(String(20), nullable=False, default="support")  # 'admin' | 'support'
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id = Column(Integer, primary_key=True)
+    actor_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True)
+    actor_email = Column(String(255), nullable=False)
+    action = Column(String(50), nullable=False)       # PLAN_CHANGE, STATUS_CHANGE, BLOCK, UNBLOCK, SEND_MESSAGE, LOGIN, etc.
+    target_type = Column(String(20), nullable=True)    # 'user', 'alert', 'config'
+    target_id = Column(String(100), nullable=True)     # whatsapp_number or alert ID
+    details = Column(JSON, nullable=True)              # {from: 'monthly', to: 'quarterly', reason: '...'}
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 

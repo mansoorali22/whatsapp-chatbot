@@ -136,6 +136,14 @@ class Settings(BaseSettings):
     PREPAID_VALIDITY_DAYS: int = 180
 
     # -------------------
+    # Admin Dashboard
+    # -------------------
+    ADMIN_JWT_SECRET: str = "change-me-to-a-long-random-string"
+    ADMIN_JWT_EXPIRY_HOURS: int = 24
+    # Comma-separated list of allowed dashboard origins for CORS
+    DASHBOARD_ORIGINS: str = "http://localhost:5173,http://localhost:8080"
+
+    # -------------------
     # Pydantic Config
     # -------------------
     model_config = SettingsConfigDict(

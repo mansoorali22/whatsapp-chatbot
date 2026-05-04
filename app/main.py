@@ -18,7 +18,9 @@ from app.db.models import ProcessedMessage, Subscription
 from app.utils.logger import setup_logging
 from app.utils.cleanup import run_processed_message_cleanup
 from app.api import whatsapp, plugnpay
+from app.api.admin import router as admin_router
 from app.services.rag import init_rag_components
+from app.core.config import settings
 
 
 @asynccontextmanager
@@ -47,20 +49,25 @@ scheduler = BackgroundScheduler()
 
 
 
+# Build CORS origins: always include local dev, plus dashboard origins from env
+_dashboard_origins = [
+    o.strip() for o in settings.DASHBOARD_ORIGINS.split(",") if o.strip()
+]
 origins = [
     "http://localhost:3000",
-    "*",
+    *_dashboard_origins,
 ]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Allows all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"], # Allows all headers
+    allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers (incl. Authorization)
 )
 
 app.include_router(whatsapp.router, prefix="/whatsapp", tags=["WhatsApp"])
 app.include_router(plugnpay.router, prefix="/plugpay", tags=["Plug&Pay"])
+app.include_router(admin_router, prefix="/admin", tags=["Admin Dashboard"])
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
