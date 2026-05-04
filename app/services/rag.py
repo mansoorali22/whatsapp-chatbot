@@ -350,13 +350,14 @@ intent_chain = None
 split_questions_chain = None
 rewrite_chain = None
 answer_chain = None
+answer_chain_raw = None  # Same as answer_chain but returns AIMessage (for token tracking)
 
 
 # -----------------------------
 # INIT RAG COMPONENTS
 # -----------------------------
 def init_rag_components():
-    global llm, retriever, intent_chain, split_questions_chain, rewrite_chain, answer_chain
+    global llm, retriever, intent_chain, split_questions_chain, rewrite_chain, answer_chain, answer_chain_raw
 
     embeddings = OpenAIEmbeddings(
         model=settings.OPENAI_EMBEDDING_MODEL
@@ -476,16 +477,17 @@ def init_rag_components():
         "15. **HISTORY INDEPENDENCE.** Each question is independent. Even if previous answers in the chat history refused a topic, you MUST still answer the current question based on the current excerpts provided. Never refuse simply because a prior turn refused.\n"
     )
 
-    answer_chain = (
-        ChatPromptTemplate.from_messages([
-            ("system", answer_system_prompt),
-            ("system", "Context excerpts from the book:\n{context}"),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}")
-        ])
-        | llm
-        | StrOutputParser()
-    )
+    _answer_prompt = ChatPromptTemplate.from_messages([
+        ("system", answer_system_prompt),
+        ("system", "Context excerpts from the book:\n{context}"),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}")
+    ])
+
+    answer_chain = _answer_prompt | llm | StrOutputParser()
+
+    # Raw version returns AIMessage with response_metadata (for B3 token tracking)
+    answer_chain_raw = _answer_prompt | llm
 
     print("✅ RAG components initialized")
 
@@ -548,6 +550,12 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
     questions = _split_into_questions(user_input)
 
+    # --- B3: Token tracking accumulators (set to 0; filled by answer paths) ---
+    _prompt_tokens = 0
+    _completion_tokens = 0
+    _cost_usd = 0.0
+    _model_used = settings.OPENAI_MODEL
+
     if len(questions) > 1:
         # Multiple questions in one message: answer each and combine into one reply
         def _excerpt_label(meta):
@@ -581,7 +589,14 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                     f"Excerpt [{_excerpt_label(doc.metadata)}]: {doc.page_content}"
                     for doc, _ in relevant_docs
                 )
-                part = answer_chain.invoke({"context": context_text, "chat_history": [], "input": q, "language": language_full})
+                ai_msg = answer_chain_raw.invoke({"context": context_text, "chat_history": [], "input": q, "language": language_full})
+                part = ai_msg.content
+                # Accumulate tokens across sub-questions
+                _tu = getattr(ai_msg, "response_metadata", {}).get("token_usage", {})
+                _prompt_tokens += _tu.get("prompt_tokens", 0)
+                _completion_tokens += _tu.get("completion_tokens", 0)
+                _model_used = getattr(ai_msg, "response_metadata", {}).get("model_name", settings.OPENAI_MODEL)
+
                 part = _strip_refusal_from_answer(part)
                 part = _localize_page_citations(q, part)
                 all_used_docs.extend(doc.metadata for doc, _ in relevant_docs)
@@ -593,6 +608,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         answer = "\n\n".join(f"{i+1}. {p}" for i, p in enumerate(parts))
         used_docs = all_used_docs
         response_type = "answered"
+        _cost_usd = (_prompt_tokens * 0.15 / 1_000_000) + (_completion_tokens * 0.60 / 1_000_000)
     else:
         # Single question
         # 3. Rewrite query
@@ -660,12 +676,21 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 for doc, _ in relevant_docs
             )
 
-            answer = answer_chain.invoke({
+            ai_msg = answer_chain_raw.invoke({
                 "context": context_text,
                 "chat_history": chat_history,
                 "input": user_input,
                 "language": language_full,
             })
+            answer = ai_msg.content
+
+            # --- B3: Extract token usage from response metadata ---
+            _token_usage = getattr(ai_msg, "response_metadata", {}).get("token_usage", {})
+            _prompt_tokens = _token_usage.get("prompt_tokens", 0)
+            _completion_tokens = _token_usage.get("completion_tokens", 0)
+            # gpt-4o-mini pricing (USD per token): input $0.15/1M, output $0.60/1M
+            _cost_usd = (_prompt_tokens * 0.15 / 1_000_000) + (_completion_tokens * 0.60 / 1_000_000)
+            _model_used = getattr(ai_msg, "response_metadata", {}).get("model_name", settings.OPENAI_MODEL)
 
             # If model wrongly appended refusal despite having relevant excerpts, strip it and keep the useful part
             answer = _strip_refusal_from_answer(answer)
@@ -691,6 +716,10 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         bot_response=answer,
         response_type=response_type,
         chunks_used=used_docs,
+        prompt_tokens=_prompt_tokens,
+        completion_tokens=_completion_tokens,
+        cost_usd=_cost_usd,
+        model=_model_used,
         history_snapshot=[
             {
                 "role": "human" if isinstance(m, HumanMessage) else "ai",
