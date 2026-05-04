@@ -20,6 +20,7 @@ from app.utils.cleanup import run_processed_message_cleanup
 from app.api import whatsapp, plugnpay
 from app.api.admin import router as admin_router
 from app.services.rag import init_rag_components
+from app.services.alert_checks import run_alert_checks
 from app.core.config import settings
 
 
@@ -35,18 +36,23 @@ async def lifespan(app: FastAPI):
         id="midnight_cleanup",
         replace_existing=True
     )
+    scheduler.add_job(
+        run_alert_checks,
+        CronTrigger(minute="*/30"),  # Every 30 minutes
+        id="alert_checks",
+        replace_existing=True
+    )
 
     scheduler.start()
-    print("🚀 Service Started: Atleet Buddy AI (Scheduler Running too)")
+    print("Service Started: Atleet Buddy AI (Scheduler Running too)")
 
     yield
     # SHUTDOWN LOGIC (Optional: close DB pools)
     scheduler.shutdown() # Stop the scheduler when the app closes
-    print("🛑 Service Stopping...")
+    print("Service Stopping...")
 
 app = FastAPI(title="Atleet Buddy AI", lifespan=lifespan)
 scheduler = BackgroundScheduler()
-
 
 
 # Build CORS origins: always include local dev, plus dashboard origins from env

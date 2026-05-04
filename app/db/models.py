@@ -55,6 +55,9 @@ class ChatLog(Base):
     response_type = Column(String(50)) # 'answered', 'refused', 'error'
     chunks_used = Column(JSON, nullable=True) # IDs and metadata of the PDF chunks
 
+    # --- B4: Refusal Analytics ---
+    refusal_category = Column(String(50), nullable=True)  # off_topic, medical_advice, inappropriate, no_context, unknown
+
     # --- B3: Token & Cost Tracking ---
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
@@ -94,5 +97,24 @@ class AuditEvent(Base):
     target_type = Column(String(20), nullable=True)    # 'user', 'alert', 'config'
     target_id = Column(String(100), nullable=True)     # whatsapp_number or alert ID
     details = Column(JSON, nullable=True)              # {from: 'monthly', to: 'quarterly', reason: '...'}
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ===========================
+# B6: Alerts
+# ===========================
+
+class Alert(Base):
+    __tablename__ = "alerts"
+
+    id = Column(Integer, primary_key=True)
+    alert_type = Column(String(50), nullable=False)    # cost_spike, usage_spike, expired_subs, high_refusal_rate
+    severity = Column(String(20), nullable=False, default="warning")  # info, warning, critical
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="active")  # active, acknowledged, resolved
+    acknowledged_by = Column(Integer, ForeignKey("admin_users.id"), nullable=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    details = Column(JSON, nullable=True)              # {threshold, actual_value, period, etc.}
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

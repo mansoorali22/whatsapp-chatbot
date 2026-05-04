@@ -341,6 +341,45 @@ def _is_refusal_response(answer: str) -> str:
     return "answered"
 
 
+def _classify_refusal(user_message: str, answer: str, had_relevant_docs: bool) -> str | None:
+    """
+    B4: Classify a refused message into a category. Returns None if not refused.
+    Categories: off_topic, no_context, medical_advice, inappropriate, unknown
+    """
+    msg = (user_message or "").lower()
+
+    # No relevant docs found → no_context (question might be on-topic but book doesn't cover it)
+    if not had_relevant_docs:
+        return "no_context"
+
+    # Medical keywords → medical_advice
+    medical_cues = [
+        "diagnos", "medicijn", "medicatie", "medication", "prescri", "dosage",
+        "symptom", "ziekte", "disease", "behandeling", "treatment", "doctor",
+        "arts", "huisarts", "diagnose", "blood test", "bloedtest",
+    ]
+    if any(c in msg for c in medical_cues):
+        return "medical_advice"
+
+    # Clearly off-topic (politics, code, etc.)
+    offtopic_cues = [
+        "politi", "code", "programming", "javascript", "python", "bitcoin",
+        "crypto", "stock", "aandeel", "oorlog", "war", "president", "election",
+        "verkiezing", "movie", "film", "game", "spotify",
+    ]
+    if any(c in msg for c in offtopic_cues):
+        return "off_topic"
+
+    # Inappropriate content
+    inappropriate_cues = [
+        "sex", "porn", "naked", "naakt", "violence", "geweld", "kill", "drug",
+    ]
+    if any(c in msg for c in inappropriate_cues):
+        return "inappropriate"
+
+    return "unknown"
+
+
 # -----------------------------
 # GLOBALS
 # -----------------------------
@@ -555,6 +594,8 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
     _completion_tokens = 0
     _cost_usd = 0.0
     _model_used = settings.OPENAI_MODEL
+    # --- B4: Refusal category (None unless refused) ---
+    _refusal_category = None
 
     if len(questions) > 1:
         # Multiple questions in one message: answer each and combine into one reply
@@ -636,7 +677,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 except Exception as retry_e:
                     print(f"❌ Retry failed: {retry_e}")
                     answer = _refusal_for_language(user_input, chat_history)
-                    db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", chunks_used=[], history_snapshot=[]))
+                    db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", refusal_category="no_context", chunks_used=[], history_snapshot=[]))
                     db.commit()
                     return answer
             else:
@@ -657,6 +698,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         if not relevant_docs:
             answer = _refusal_for_language(user_input, chat_history)
             response_type = "refused"
+            _refusal_category = _classify_refusal(user_input, answer, had_relevant_docs=False)
             used_docs = []
         else:
             def _excerpt_label(meta):
@@ -708,6 +750,8 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
             # Only treat as refused if answer is essentially the refusal (no substantive content)
             response_type = _is_refusal_response(answer)
+            if response_type == "refused":
+                _refusal_category = _classify_refusal(user_input, answer, had_relevant_docs=True)
 
     # 6. Save chat log
     db.add(ChatLog(
@@ -715,6 +759,89 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         user_message=user_input,
         bot_response=answer,
         response_type=response_type,
+        refusal_category=_refusal_category,
+        chunks_used=used_docs,
+        prompt_tokens=_prompt_tokens,
+        completion_tokens=_completion_tokens,
+        cost_usd=_cost_usd,
+        model=_model_used,
+        history_snapshot=[
+            {
+                "role": "human" if isinstance(m, HumanMessage) else "ai",
+                "content": m.content
+            }
+            for m in chat_history
+        ]
+    ))
+    db.commit()
+
+    # -----------------------------
+    # 7. CLEANUP OLD CHAT LOGS (FIXED)
+    # -----------------------------
+    keep_ids = (
+        db.query(ChatLog.id)
+        .filter(ChatLog.whatsapp_number == whatsapp_number)
+        .order_by(desc(ChatLog.created_at))
+        .limit(settings.MAX_CHAT_LOG_MESSAGES)
+        .all()
+    )
+
+    keep_ids = [id for (id,) in keep_ids]
+
+    if keep_ids:
+        (
+            db.query(ChatLog)
+            .filter(ChatLog.whatsapp_number == whatsapp_number)
+            .filter(~ChatLog.id.in_(keep_ids))
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+
+    # Do NOT stack the welcome intro on top of a refusal — that produces a confusing
+    # "intro + we can't help" sandwich on the user's very first message.
+    if response_type == "refused":
+        return answer
+    return _prepend_welcome_if_first(answer, is_first_message, user_input)
+                "chat_history": chat_history,
+                "input": user_input,
+                "language": language_full,
+            })
+            answer = ai_msg.content
+
+            # --- B3: Extract token usage from response metadata ---
+            _token_usage = getattr(ai_msg, "response_metadata", {}).get("token_usage", {})
+            _prompt_tokens = _token_usage.get("prompt_tokens", 0)
+            _completion_tokens = _token_usage.get("completion_tokens", 0)
+            # gpt-4o-mini pricing (USD per token): input $0.15/1M, output $0.60/1M
+            _cost_usd = (_prompt_tokens * 0.15 / 1_000_000) + (_completion_tokens * 0.60 / 1_000_000)
+            _model_used = getattr(ai_msg, "response_metadata", {}).get("model_name", settings.OPENAI_MODEL)
+
+            # If model wrongly appended refusal despite having relevant excerpts, strip it and keep the useful part
+            answer = _strip_refusal_from_answer(answer)
+            # Remove duplicated paragraphs/sentences (defends against the 'same answer twice' issue)
+            answer = _dedupe_paragraphs(answer)
+            # Use Dutch 'pagina' instead of 'page' when user wrote in Dutch
+            answer = _localize_page_citations(user_input, answer)
+
+            used_docs = [doc.metadata for doc, _ in relevant_docs]
+            # If user asked for reference/source/page but the model didn't include one, append references from excerpts
+            if _user_asks_for_reference(user_input) and not _answer_has_page_reference(answer):
+                ref_line = _format_references_line(used_docs, use_dutch=_message_suggests_dutch(user_input))
+                if ref_line:
+                    answer = (answer.rstrip() + "\n\n" + ref_line).strip()
+
+            # Only treat as refused if answer is essentially the refusal (no substantive content)
+            response_type = _is_refusal_response(answer)
+            if response_type == "refused":
+                _refusal_category = _classify_refusal(user_input, answer, had_relevant_docs=True)
+
+    # 6. Save chat log
+    db.add(ChatLog(
+        whatsapp_number=whatsapp_number,
+        user_message=user_input,
+        bot_response=answer,
+        response_type=response_type,
+        refusal_category=_refusal_category,
         chunks_used=used_docs,
         prompt_tokens=_prompt_tokens,
         completion_tokens=_completion_tokens,
