@@ -200,9 +200,9 @@ def update_plan(
     whatsapp_number: str,
     body: PlanUpdate,
     db: Session = Depends(get_db),
-    admin: AdminUser = Depends(require_admin_role),
+    admin: AdminUser = Depends(get_current_admin),
 ):
-    """Change a user's plan, credits, and recurring flag. Admin only."""
+    """Change a user's plan, credits, and recurring flag. Admin and support."""
     sub = _get_subscription_or_404(db, whatsapp_number)
 
     old_plan = sub.plan_name
@@ -355,5 +355,4 @@ async def send_message_to_user(
         "message_preview": body.message[:100],
     })
     db.commit()
-
     return {"status": "sent", "to": whatsapp_number}
