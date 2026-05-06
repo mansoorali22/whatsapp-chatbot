@@ -1,9 +1,11 @@
 # Standard library imports
 from contextlib import asynccontextmanager
+import traceback
 
 # FastAPI imports
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # SQLAlchemy imports
 from sqlalchemy.orm import Session
@@ -70,6 +72,16 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
     allow_headers=["*"],  # Allows all headers (incl. Authorization)
 )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch unhandled errors so CORS headers are still included and
+    the real error shows in Render logs instead of a bare 500."""
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {type(exc).__name__}: {exc}"},
+    )
 
 app.include_router(whatsapp.router, prefix="/whatsapp", tags=["WhatsApp"])
 app.include_router(plugnpay.router, prefix="/plugpay", tags=["Plug&Pay"])
