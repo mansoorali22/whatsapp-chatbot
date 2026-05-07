@@ -139,16 +139,17 @@ def patch_alert(
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    if body.status not in ("acknowledged", "resolved"):
-        raise HTTPException(status_code=400, detail="status must be 'acknowledged' or 'resolved'")
+    if body.status not in ("acknowledged", "resolved", "active"):
+        raise HTTPException(status_code=400, detail="status must be 'acknowledged', 'resolved', or 'active'")
 
     alert.status = body.status
     if body.status == "acknowledged":
         alert.acknowledged_by = admin.id
         alert.acknowledged_at = datetime.now(timezone.utc)
-    elif body.status == "resolved":
-        # Keep acknowledgment info, just update status
-        pass
+    elif body.status == "active":
+        # Reopen — clear acknowledgment info
+        alert.acknowledged_by = None
+        alert.acknowledged_at = None
 
     db.commit()
     db.refresh(alert)
