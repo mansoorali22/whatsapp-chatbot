@@ -65,9 +65,14 @@ origins = [
     "http://localhost:3000",
     *_dashboard_origins,
 ]
+
+# Also allow any Vercel preview deployment for the dashboard project
+_allow_origin_regex = r"https://atleet-buddy-hub.*\.vercel\.app"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
     allow_headers=["*"],  # Allows all headers (incl. Authorization)
