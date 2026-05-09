@@ -97,23 +97,36 @@ def run_alert_checks():
         # ─── 4. Expiring subscriptions ───
         if not _already_alerted_today(db, "expired_subs"):
             cutoff = now + timedelta(days=EXPIRING_SUBS_DAYS_AHEAD)
-            expiring_count = int(
-                db.query(func.count(Subscription.id))
+            expiring_subs = (
+                db.query(Subscription)
                 .filter(
                     Subscription.status == "active",
                     Subscription.subscription_end.isnot(None),
                     Subscription.subscription_end <= cutoff,
                     Subscription.subscription_end >= now,
                 )
-                .scalar() or 0
+                .all()
             )
-            if expiring_count > 0:
+            if expiring_subs:
+                users_info = []
+                for s in expiring_subs:
+                    days_left = (s.subscription_end - now).days
+                    users_info.append({
+                        "whatsapp": s.whatsapp_number,
+                        "plan": s.plan_name or "Unknown",
+                        "expires": s.subscription_end.strftime("%Y-%m-%d") if s.subscription_end else "—",
+                        "days_left": days_left,
+                    })
+                user_lines = ", ".join(
+                    f"{u['whatsapp']} ({u['plan']}, {u['days_left']}d left)"
+                    for u in users_info
+                )
                 db.add(Alert(
                     alert_type="expired_subs",
                     severity="info",
-                    title=f"{expiring_count} subscription(s) expiring within {EXPIRING_SUBS_DAYS_AHEAD} days",
-                    message=f"{expiring_count} active subscription(s) will expire in the next {EXPIRING_SUBS_DAYS_AHEAD} days.",
-                    details={"count": expiring_count, "days_ahead": EXPIRING_SUBS_DAYS_AHEAD},
+                    title=f"{len(expiring_subs)} subscription(s) expiring within {EXPIRING_SUBS_DAYS_AHEAD} days",
+                    message=f"Expiring users: {user_lines}",
+                    details={"count": len(expiring_subs), "days_ahead": EXPIRING_SUBS_DAYS_AHEAD, "users": users_info},
                 ))
 
         db.commit()
