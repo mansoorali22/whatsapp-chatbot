@@ -11,6 +11,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 from app.core.config import settings
 from app.db.models import ChatLog
+from app.services.profile_extractor import extract_profile_fields, upsert_profile
 
 # Single opening message (first message / greeting) – no duplicate text
 OPENING_MESSAGE_NL = (
@@ -774,6 +775,18 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         ]
     ))
     db.commit()
+
+    # -----------------------------
+    # 6b. PROFILE EXTRACTION (D/E1)
+    # -----------------------------
+    # Only run for answered questions (not greetings/thanks/refusals)
+    if response_type == "answered":
+        try:
+            profile_fields = extract_profile_fields(user_input, answer)
+            if profile_fields:
+                upsert_profile(db, whatsapp_number, profile_fields)
+        except Exception as e:
+            print(f"⚠️ Profile extraction error (non-fatal): {e}")
 
     # -----------------------------
     # 7. CLEANUP OLD CHAT LOGS (FIXED)

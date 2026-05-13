@@ -1,5 +1,6 @@
 from sqlalchemy import Column, String, Integer, Float, DateTime, Text, JSON, Index, Boolean, ForeignKey
 from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 from .connection import Base
 
 class Subscription(Base):
@@ -27,6 +28,35 @@ class Subscription(Base):
     # --- Timestamps ---
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationship to profile
+    profile = relationship("UserProfile", back_populates="subscription", uselist=False)
+
+
+class UserProfile(Base):
+    """D/E1: Lightweight user profile for personalized responses."""
+    __tablename__ = "user_profiles"
+
+    id = Column(Integer, primary_key=True)
+    whatsapp_number = Column(
+        String(20),
+        ForeignKey("subscriptions.whatsapp_number"),
+        unique=True,
+        nullable=False,
+    )
+    weight_kg = Column(Float, nullable=True)
+    height_cm = Column(Float, nullable=True)
+    age = Column(Integer, nullable=True)
+    goals = Column(Text, nullable=True)               # e.g. "muscle gain", "weight loss"
+    sport = Column(Text, nullable=True)                # e.g. "running", "cycling", "gym"
+    dietary_preferences = Column(Text, nullable=True)  # e.g. "vegetarian", "no lactose"
+    training_frequency = Column(Text, nullable=True)   # e.g. "4x per week"
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationship back to subscription
+    subscription = relationship("Subscription", back_populates="profile")
+
 
 class ProcessedMessage(Base):
     __tablename__ = "processed_messages"

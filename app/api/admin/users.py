@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.db.connection import get_db
-from app.db.models import Subscription, ChatLog, AuditEvent, AdminUser
+from app.db.models import Subscription, ChatLog, AuditEvent, AdminUser, UserProfile
 from app.middleware.admin_auth import get_current_admin, require_admin_role
 from app.api.whatsapp import send_whatsapp_message
 
@@ -70,8 +70,23 @@ class ChatLogOut(BaseModel):
         from_attributes = True
 
 
+class ProfileOut(BaseModel):
+    weight_kg: float | None = None
+    height_cm: float | None = None
+    age: int | None = None
+    goals: str | None = None
+    sport: str | None = None
+    dietary_preferences: str | None = None
+    training_frequency: str | None = None
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
 class UserDetailResponse(BaseModel):
     user: UserOut
+    profile: ProfileOut | None = None
     recent_chats: list[ChatLogOut]
 
 
@@ -178,8 +193,10 @@ def get_user_detail(
     db: Session = Depends(get_db),
     admin: AdminUser = Depends(get_current_admin),
 ):
-    """Single user detail with their last 20 chat logs."""
+    """Single user detail with their last 20 chat logs and profile."""
     sub = _get_subscription_or_404(db, whatsapp_number)
+
+    profile = db.query(UserProfile).filter_by(whatsapp_number=whatsapp_number).first()
 
     recent_chats = (
         db.query(ChatLog)
@@ -191,6 +208,7 @@ def get_user_detail(
 
     return UserDetailResponse(
         user=UserOut.model_validate(sub),
+        profile=ProfileOut.model_validate(profile) if profile else None,
         recent_chats=[ChatLogOut.model_validate(c) for c in recent_chats],
     )
 
