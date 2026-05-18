@@ -10,19 +10,19 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
 
 from app.core.config import settings
-from app.db.models import ChatLog
+from app.db.models import ChatLog, UserProfile
 from app.services.profile_extractor import extract_profile_fields, upsert_profile
 
-# Single opening message (first message / greeting) – no duplicate text
+# Single opening message (first message / greeting) -- no duplicate text
 OPENING_MESSAGE_NL = (
-    "Hoi! 👋 Ik ben de Eet als een Atleet-assistent. Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
+    "Hoi! \U0001f44b Ik ben de Eet als een Atleet-assistent. Ik beantwoord graag al je vragen over sportvoeding, herstel, gezonde voeding en recept inspiratie. "
     "Verwacht praktische tips, evidence-based advies en ideeën die je meteen kunt toepassen in je keuken en sport voorbereiding! "
     "Nieuwsgierig of ik jouw perfecte buddy ben? Je kunt me gratis 15 vragen stellen!\n\n"
     "De antwoorden worden automatisch gegenereerd en zijn enkel en alleen gebaseerd op de inhoud van het boek. "
     "Wees er bewust van dat AI fouten kan maken en weet dat wij nooit medische adviezen zullen geven."
 )
 OPENING_MESSAGE_EN = (
-    "Hi! 👋 I'm the Eat like an Athlete assistant. I'm happy to answer your questions about sports nutrition, recovery, healthy eating and recipe inspiration. "
+    "Hi! \U0001f44b I'm the Eat like an Athlete assistant. I'm happy to answer your questions about sports nutrition, recovery, healthy eating and recipe inspiration. "
     "Expect practical tips, evidence-based advice and ideas you can use straight away in your kitchen and training. "
     "Curious if I'm your perfect buddy? You can ask me 15 questions for free!\n\n"
     "Answers are generated automatically and are based solely on the book content. "
@@ -56,11 +56,11 @@ _REFUSAL_HISTORY_MARKERS = [
 
 
 _REFUSAL_SENTENCE_PATTERNS = [
-    r"Unfortunately,?\s*I (?:can(?:'|’)?t|cannot) help you with this question[^.]*\.",
-    r"However,?\s*I(?:'|’)?m happy to help (?:you )?with questions about sports nutrition!?",
+    r"Unfortunately,?\s*I (?:can(?:'|')?t|cannot) help you with this question[^.]*\.",
+    r"However,?\s*I(?:'|')?m happy to help (?:you )?with questions about sports nutrition!?",
     r"Helaas kan ik je bij deze vraag niet helpen[^.]*\.",
     r"Wel help ik je graag (?:verder )?met vragen over sportvoeding!?",
-    r"I don(?:'|’)?t know\.?\s*This is outside the book(?:'|’)?s context\.?",
+    r"I don(?:'|')?t know\.?\s*This is outside the book(?:'|')?s context\.?",
     r"Ik weet het niet\.?\s*Dit is buiten de context van het boek\.?",
 ]
 
@@ -208,7 +208,7 @@ def _detect_language(user_input: str, chat_history: list | None = None) -> str:
             content = getattr(m, "content", "") or ""
             if not content:
                 continue
-            # Only consider human messages (HumanMessage class) — fall back gracefully
+            # Only consider human messages (HumanMessage class) -- fall back gracefully
             if m.__class__.__name__ != "HumanMessage":
                 continue
             nl = _use_dutch_page_word(content)
@@ -222,7 +222,7 @@ def _detect_language(user_input: str, chat_history: list | None = None) -> str:
         return "nl"
     if default in ("en", "english", "engels"):
         return "en"
-    # Book is Dutch — safer default than bilingual stacking
+    # Book is Dutch -- safer default than bilingual stacking
     return "nl"
 
 
@@ -349,11 +349,11 @@ def _classify_refusal(user_message: str, answer: str, had_relevant_docs: bool) -
     """
     msg = (user_message or "").lower()
 
-    # No relevant docs found → no_context (question might be on-topic but book doesn't cover it)
+    # No relevant docs found -> no_context (question might be on-topic but book doesn't cover it)
     if not had_relevant_docs:
         return "no_context"
 
-    # Medical keywords → medical_advice
+    # Medical keywords -> medical_advice
     medical_cues = [
         "diagnos", "medicijn", "medicatie", "medication", "prescri", "dosage",
         "symptom", "ziekte", "disease", "behandeling", "treatment", "doctor",
@@ -456,18 +456,18 @@ def init_rag_components():
                 "system",
                 "Rewrite the user message into a standalone search query for finding relevant book content. "
                 "Use chat history for context. Output the query in English only. Return ONLY the rewritten query, nothing else.\n\n"
-                "FOLLOW-UP HANDLING (critical): If the user message is a follow-up — it uses pronouns ('it','that','this','die','het','dat','deze','dit'), or starts with 'and …'/'en …'/'wat dan met …'/'and what about …', or is short and clearly continues the previous topic — you MUST resolve it against the most recent topic in chat history before producing the query. Example: previous turn was about protein for older adults and the user now writes 'En voor jongeren?' → rewrite to 'protein needs for young athletes'.\n\n"
+                "FOLLOW-UP HANDLING (critical): If the user message is a follow-up -- it uses pronouns ('it','that','this','die','het','dat','deze','dit'), or starts with 'and ...'/'en ...'/'wat dan met ...'/'and what about ...', or is short and clearly continues the previous topic -- you MUST resolve it against the most recent topic in chat history before producing the query. Example: previous turn was about protein for older adults and the user now writes 'En voor jongeren?' -> rewrite to 'protein needs for young athletes'.\n\n"
                 "TOPIC NORMALIZATION (use the same English terms regardless of source language so retrieval is consistent):\n"
-                "  • verzadigd vet / saturated fat → 'saturated fat health effects'\n"
-                "  • onverzadigd vet / gezonde oliën / unsaturated / healthy oils → 'unsaturated fats healthy oils'\n"
-                "  • eiwit / proteïne / protein → 'protein intake recovery'\n"
-                "  • koolhydraten / carbs → 'carbohydrates endurance'\n"
-                "  • herstel / recovery → 'recovery nutrition after training'\n"
-                "  • recept / recepten / recipe / recipes / inspiratie → 'recipes meal ideas'\n"
-                "  • dagmenu / daily menu / sample day → 'daily menu sample meal plan'\n"
-                "  • wedstrijd / competition → 'competition day nutrition'\n"
-                "  • hydratatie / hydration / drinken → 'hydration fluids athletes'\n"
-                "  • oudere / 80 / senior / older athlete → 'protein nutrition older adults'\n"
+                "  - verzadigd vet / saturated fat -> 'saturated fat health effects'\n"
+                "  - onverzadigd vet / gezonde olien / unsaturated / healthy oils -> 'unsaturated fats healthy oils'\n"
+                "  - eiwit / proteine / protein -> 'protein intake recovery'\n"
+                "  - koolhydraten / carbs -> 'carbohydrates endurance'\n"
+                "  - herstel / recovery -> 'recovery nutrition after training'\n"
+                "  - recept / recepten / recipe / recipes / inspiratie -> 'recipes meal ideas'\n"
+                "  - dagmenu / daily menu / sample day -> 'daily menu sample meal plan'\n"
+                "  - wedstrijd / competition -> 'competition day nutrition'\n"
+                "  - hydratatie / hydration / drinken -> 'hydration fluids athletes'\n"
+                "  - oudere / 80 / senior / older athlete -> 'protein nutrition older adults'\n"
                 "Preserve any specific numbers, ages, weights, or sport names from the user's message in the query."
             ),
             MessagesPlaceholder("chat_history"),
@@ -477,7 +477,7 @@ def init_rag_components():
         | StrOutputParser()
     )
 
-    # 4. Answer generation — friendly, concise, single-language
+    # 4. Answer generation -- friendly, concise, single-language
     max_words = getattr(settings, "ANSWER_MAX_WORDS", 120)
     enable_clarify = getattr(settings, "ENABLE_CLARIFY_QUESTION", True)
     enable_followup = getattr(settings, "ENABLE_FOLLOWUP_SUGGESTIONS", True)
@@ -487,9 +487,9 @@ def init_rag_components():
         "You will receive excerpts from the book labeled like [page N] or [section N], plus the recent chat history.\n\n"
         "## HARD RULES (in priority order)\n"
         "1. **LANGUAGE LOCK.** Write the ENTIRE reply in {language} ('nl' = Dutch, 'en' = English). Never mix languages. If the source excerpts are in another language, translate them. Do NOT include any sentence in the other language, not even a refusal or disclaimer.\n"
-        "2. **BOOK ONLY — ZERO FABRICATION.** Your ONLY source of truth is the provided excerpt text. "
+        "2. **BOOK ONLY -- ZERO FABRICATION.** Your ONLY source of truth is the provided excerpt text. "
         "You may ONLY state facts, ingredients, instructions, or numbers that are **literally written** in the excerpts. "
-        "NEVER fill in details from your own knowledge — not even if the topic seems obvious. "
+        "NEVER fill in details from your own knowledge -- not even if the topic seems obvious. "
         "Specifically for RECIPES: if an excerpt lists a recipe name (e.g. 'Chunky Monkey oats') but does NOT include the full ingredients and instructions, you must say the book has that recipe and cite the page, but you must NOT invent the ingredients or steps yourself. "
         "Only present a full recipe when the excerpt text itself contains the ingredients and preparation steps. "
         "If no excerpt contains what the user asks for, say so honestly and offer to help find what the book does cover.\n"
@@ -497,29 +497,44 @@ def init_rag_components():
         f"4. **BE CONCISE.** Target {max_words} words or fewer. Only go longer when the user explicitly asks for a meal plan, sample day, or detailed example.\n"
         "5. **REALISTIC PORTIONS FOR ONE PERSON, ONE MOMENT.** When you mention amounts, give them for a single person and a single meal/snack. Do NOT stack a full day's worth of food into one example. Match portions to the user's stated context (age, weight, training type) when known from chat history.\n"
         "6. **PERSONALIZE FROM HISTORY.** If the user has shared personal info in earlier messages (age, weight, sport, training frequency, goals), use it. If they ask about 'protein for me', use what you know about them.\n"
+        "6b. **USE PROFILE DATA.** The user's stored profile (if any) is provided as a separate system message. "
+        "Use it to tailor portions, recommendations, and examples. A 60kg endurance runner needs different advice "
+        "than a 90kg strength athlete. If their goal is weight loss, emphasize caloric context. "
+        "If their goal is muscle gain, emphasize protein timing and amounts. "
+        "Never repeat the profile back to the user -- just use it naturally.\n"
         "7. **CONSISTENCY WITH PRIOR ANSWERS.** If your earlier answers in this same chat differ from what you'd say now (e.g. 'avoid protein right before training' vs 'take protein after training'), call out the distinction in one short sentence so the user is not confused.\n"
         + (
             "8. **CLARIFY WHEN TRULY VAGUE.** If the question is too vague to answer well (e.g. 'what should I eat?' with zero context) AND chat history has no clarifying info (sport, time of day, weight, goal), ask exactly ONE short clarifying question and stop. Never ask more than one. Never ask if the question is already specific enough or if the answer is obvious from context.\n"
             if enable_clarify else ""
         )
         + (
-            "9. **OPTIONAL FOLLOW-UP.** After a substantive answer, you MAY end with ONE short suggestion of a natural follow-up the user might want next (e.g. 'Wil je dat ik dit toepas op jouw trainingsdag?'). Only when the topic naturally invites depth — never on greetings, thanks, refusals, or when you just asked a clarifying question.\n"
+            "9. **OPTIONAL FOLLOW-UP.** After a substantive answer, you MAY end with ONE short suggestion of a natural follow-up the user might want next (e.g. 'Wil je dat ik dit toepas op jouw trainingsdag?'). Only when the topic naturally invites depth -- never on greetings, thanks, refusals, or when you just asked a clarifying question.\n"
             if enable_followup else ""
         )
         + "10. **REFERENCES.** When the user asks for a reference / source / page (words like 'page','pagina','bladzijde','bron','referentie','where','waar','source'), include the page/section numbers from the excerpt labels. Use 'page N' in English, 'pagina N' in Dutch. Otherwise do NOT add page numbers.\n"
-        "11. **DISCLAIMER.** Only when you give specific nutrient amounts or portion sizes, add ONE short sentence in {language}: Dutch: 'Dit is algemene informatie; voor persoonlijk advies kun je een (sport)diëtist raadplegen.' English: 'This is general information; for personal advice you can consult a (sports) dietitian.'\n"
-        "12. **REFUSE ONLY WHEN TRULY OFF-TOPIC.** Off-topic = politics, code, medical diagnosis, anything unrelated to food, eating, sport, recovery, recipes, hydration, age groups, body composition. Anything about nutrition — including for older adults, beginners, casual exercisers, or people with general health goals — is IN scope. The book covers sports nutrition broadly; do NOT refuse just because the user is not a competitive athlete.\n"
+        "11. **DISCLAIMER.** Only when you give specific nutrient amounts or portion sizes, add ONE short sentence in {language}: Dutch: 'Dit is algemene informatie; voor persoonlijk advies kun je een (sport)dietist raadplegen.' English: 'This is general information; for personal advice you can consult a (sports) dietitian.'\n"
+        "12. **REFUSE ONLY WHEN TRULY OFF-TOPIC.** Off-topic = politics, code, medical diagnosis, anything unrelated to food, eating, sport, recovery, recipes, hydration, age groups, body composition. Anything about nutrition -- including for older adults, beginners, casual exercisers, or people with general health goals -- is IN scope. The book covers sports nutrition broadly; do NOT refuse just because the user is not a competitive athlete.\n"
         "13. **REFUSAL FORMAT.** When (and only when) you must refuse, reply with EXACTLY one of these single lines and nothing else:\n"
         "    - Dutch: \"Helaas kan ik je bij deze vraag niet helpen. Wel help ik je graag verder met vragen over sportvoeding!\"\n"
         "    - English: \"Unfortunately, I can't help you with this question. However, I'm happy to help you with questions about sports nutrition!\"\n"
         "    Use the line that matches {language}. Never output both. Never combine refusal with substantive content in the same reply.\n"
         "14. **NO META.** Never mention 'excerpts', 'chunks', 'context', 'the system', or that you have 'no information'. If you can't answer, use the refusal in rule 12.\n"
         "15. **HISTORY INDEPENDENCE.** Each question is independent. Even if previous answers in the chat history refused a topic, you MUST still answer the current question based on the current excerpts provided. Never refuse simply because a prior turn refused.\n"
+        "16. **PRACTICAL & ACTIONABLE.** Always make advice concrete and usable:\n"
+        "   - Convert abstract advice into specific actions (e.g. 'eat more protein' -> 'add a handful of nuts to your morning oats')\n"
+        "   - When the book mentions quantities, relate them to common foods the user recognizes\n"
+        "   - If the user has a profile, calculate amounts for their specific weight/goals\n"
+        "   - Prefer 'try this' over 'you should' -- keep the friendly buddy tone\n"
+        "17. **EXAMPLE-DRIVEN.** When the book provides examples, recipes, or sample meals, "
+        "lead with those rather than abstract principles. Users remember concrete examples better "
+        "than rules. If the book mentions a specific recipe as a pre-workout meal, say that "
+        "specifically rather than 'a carbohydrate-rich breakfast'.\n"
     )
 
     _answer_prompt = ChatPromptTemplate.from_messages([
         ("system", answer_system_prompt),
         ("system", "Context excerpts from the book:\n{context}"),
+        ("system", "{profile_context}"),
         MessagesPlaceholder("chat_history"),
         ("human", "{input}")
     ])
@@ -529,7 +544,7 @@ def init_rag_components():
     # Raw version returns AIMessage with response_metadata (for B3 token tracking)
     answer_chain_raw = _answer_prompt | llm
 
-    print("✅ RAG components initialized")
+    print("RAG components initialized")
 
 
 # -----------------------------
@@ -559,7 +574,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
     chat_history = []
     for log in reversed(past_logs):
-        # Skip refused exchanges — prior refusals in history bias the LLM toward refusing future questions
+        # Skip refused exchanges -- prior refusals in history bias the LLM toward refusing future questions
         if log.response_type == "refused":
             continue
         if any(marker in (log.bot_response or "") for marker in _REFUSAL_HISTORY_MARKERS):
@@ -570,6 +585,32 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
     # Single source of truth for the reply language.
     language_code = _detect_language(user_input, chat_history)
     language_full = "Dutch" if language_code == "nl" else "English"
+
+    # D/E2: Load user profile for personalized responses
+    _profile = None
+    _profile_context = ""
+    try:
+        _profile = db.query(UserProfile).filter_by(whatsapp_number=whatsapp_number).first()
+        if _profile:
+            parts = []
+            if _profile.age:
+                parts.append(f"Age: {_profile.age}")
+            if _profile.weight_kg:
+                parts.append(f"Weight: {_profile.weight_kg}kg")
+            if _profile.height_cm:
+                parts.append(f"Height: {_profile.height_cm}cm")
+            if _profile.sport:
+                parts.append(f"Sport: {_profile.sport}")
+            if _profile.goals:
+                parts.append(f"Goals: {_profile.goals}")
+            if _profile.training_frequency:
+                parts.append(f"Training: {_profile.training_frequency}")
+            if _profile.dietary_preferences:
+                parts.append(f"Diet: {_profile.dietary_preferences}")
+            if parts:
+                _profile_context = "User profile: " + ", ".join(parts)
+    except Exception as e:
+        print(f"Profile load failed (non-fatal): {e}")
 
     # 1. Intent check
     intent = intent_chain.invoke({"input": user_input}).strip().upper()
@@ -631,7 +672,13 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                     f"Excerpt [{_excerpt_label(doc.metadata)}]: {doc.page_content}"
                     for doc, _ in relevant_docs
                 )
-                ai_msg = answer_chain_raw.invoke({"context": context_text, "chat_history": [], "input": q, "language": language_full})
+                ai_msg = answer_chain_raw.invoke({
+                    "context": context_text,
+                    "chat_history": [],
+                    "input": q,
+                    "language": language_full,
+                    "profile_context": _profile_context,
+                })
                 part = ai_msg.content
                 # Accumulate tokens across sub-questions
                 _tu = getattr(ai_msg, "response_metadata", {}).get("token_usage", {})
@@ -658,7 +705,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             "chat_history": chat_history,
             "input": user_input
         })
-        print(f"🔍 DEBUG Rewritten Query: {rewritten_query}")
+        print(f"DEBUG Rewritten Query: {rewritten_query}")
 
         # 4. Vector retrieval (with retry on stale DB connection)
         def _do_retrieval():
@@ -671,12 +718,12 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             docs_with_scores = _do_retrieval()
         except OperationalError as e:
             if "SSL connection" in str(e) or "closed" in str(e).lower() or "connection" in str(e).lower():
-                print("⚠️ DB connection stale, re-initializing RAG and retrying once...")
+                print("DB connection stale, re-initializing RAG and retrying once...")
                 init_rag_components()
                 try:
                     docs_with_scores = _do_retrieval()
                 except Exception as retry_e:
-                    print(f"❌ Retry failed: {retry_e}")
+                    print(f"Retry failed: {retry_e}")
                     answer = _refusal_for_language(user_input, chat_history)
                     db.add(ChatLog(whatsapp_number=whatsapp_number, user_message=user_input, bot_response=answer, response_type="refused", refusal_category="no_context", chunks_used=[], history_snapshot=[]))
                     db.commit()
@@ -693,7 +740,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         if not relevant_docs and docs_with_scores:
             relevant_docs = list(docs_with_scores)[:3]
 
-        print(f"📊 DEBUG: Found {len(relevant_docs)} relevant chunks")
+        print(f"DEBUG: Found {len(relevant_docs)} relevant chunks")
 
         # 5. Answer phase
         if not relevant_docs:
@@ -703,7 +750,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             used_docs = []
         else:
             def _excerpt_label(meta):
-                """Label excerpts: page when available, otherwise section N (so we always have a reference to give when asked)."""
+                """Label excerpts: page when available, otherwise section N."""
                 page = meta.get("page")
                 chunk = meta.get("chunk_index", "?")
                 section = meta.get("section")
@@ -724,6 +771,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 "chat_history": chat_history,
                 "input": user_input,
                 "language": language_full,
+                "profile_context": _profile_context,
             })
             answer = ai_msg.content
 
@@ -745,7 +793,9 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             used_docs = [doc.metadata for doc, _ in relevant_docs]
             # If user asked for reference/source/page but the model didn't include one, append references from excerpts
             if _user_asks_for_reference(user_input) and not _answer_has_page_reference(answer):
-                ref_line = _format_references_line(used_docs, use_dutch=_message_suggests_dutch(user_input))
+                ref_line = _format_references_line(
+                    used_docs, use_dutch=_message_suggests_dutch(user_input)
+                )
                 if ref_line:
                     answer = (answer.rstrip() + "\n\n" + ref_line).strip()
 
@@ -786,7 +836,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             if profile_fields:
                 upsert_profile(db, whatsapp_number, profile_fields)
         except Exception as e:
-            print(f"⚠️ Profile extraction error (non-fatal): {e}")
+            print(f"Profile extraction error (non-fatal): {e}")
 
     # -----------------------------
     # 7. CLEANUP OLD CHAT LOGS (FIXED)
@@ -810,7 +860,80 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         )
         db.commit()
 
-    # Do NOT stack the welcome intro on top of a refusal — that produces a confusing
+    # Do NOT stack the welcome intro on top of a refusal -- that produces a confusing
+    # "intro + we can't help" sandwich on the user's very first message.
+    if response_type == "refused":
+        return answer
+    return _prepend_welcome_if_first(answer, is_first_message, user_input)
+) and not _answer_has_page_reference(answer):
+                ref_line = _format_references_line(
+                    used_docs, use_dutch=_message_suggests_dutch(user_input)
+                )
+                if ref_line:
+                    answer = (answer.rstrip() + "\n\n" + ref_line).strip()
+
+            # Only treat as refused if answer is essentially the refusal (no substantive content)
+            response_type = _is_refusal_response(answer)
+            if response_type == "refused":
+                _refusal_category = _classify_refusal(user_input, answer, had_relevant_docs=True)
+
+    # 6. Save chat log
+    db.add(ChatLog(
+        whatsapp_number=whatsapp_number,
+        user_message=user_input,
+        bot_response=answer,
+        response_type=response_type,
+        refusal_category=_refusal_category,
+        chunks_used=used_docs,
+        prompt_tokens=_prompt_tokens,
+        completion_tokens=_completion_tokens,
+        cost_usd=_cost_usd,
+        model=_model_used,
+        history_snapshot=[
+            {
+                "role": "human" if isinstance(m, HumanMessage) else "ai",
+                "content": m.content
+            }
+            for m in chat_history
+        ]
+    ))
+    db.commit()
+
+    # -----------------------------
+    # 6b. PROFILE EXTRACTION (D/E1)
+    # -----------------------------
+    # Only run for answered questions (not greetings/thanks/refusals)
+    if response_type == "answered":
+        try:
+            profile_fields = extract_profile_fields(user_input, answer)
+            if profile_fields:
+                upsert_profile(db, whatsapp_number, profile_fields)
+        except Exception as e:
+            print(f"Profile extraction error (non-fatal): {e}")
+
+    # -----------------------------
+    # 7. CLEANUP OLD CHAT LOGS (FIXED)
+    # -----------------------------
+    keep_ids = (
+        db.query(ChatLog.id)
+        .filter(ChatLog.whatsapp_number == whatsapp_number)
+        .order_by(desc(ChatLog.created_at))
+        .limit(settings.MAX_CHAT_LOG_MESSAGES)
+        .all()
+    )
+
+    keep_ids = [id for (id,) in keep_ids]
+
+    if keep_ids:
+        (
+            db.query(ChatLog)
+            .filter(ChatLog.whatsapp_number == whatsapp_number)
+            .filter(~ChatLog.id.in_(keep_ids))
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+
+    # Do NOT stack the welcome intro on top of a refusal -- that produces a confusing
     # "intro + we can't help" sandwich on the user's very first message.
     if response_type == "refused":
         return answer
