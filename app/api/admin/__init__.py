@@ -11,6 +11,7 @@ from .audit import router as audit_router
 from .usage import router as usage_router
 from .refusals import router as refusals_router
 from .alerts import router as alerts_router
+from .faq import router as faq_router
 
 router = APIRouter()
 
@@ -31,3 +32,6 @@ router.include_router(refusals_router, tags=["Admin Refusals"])
 
 # /admin/alerts, /admin/alerts/stats, /admin/alerts/{id}
 router.include_router(alerts_router, tags=["Admin Alerts"])
+
+# /admin/faq, /admin/faq/stats, /admin/faq/{id}
+router.include_router(faq_router, tags=["Admin FAQ"])

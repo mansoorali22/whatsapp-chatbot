@@ -148,3 +148,20 @@ class Alert(Base):
     details = Column(JSON, nullable=True)              # {threshold, actual_value, period, etc.}
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+
+# ===========================
+# D/E5: FAQ Cache
+# ===========================
+
+class FAQCache(Base):
+    __tablename__ = "faq_cache"
+
+    id = Column(Integer, primary_key=True)
+    question_hash = Column(String(64), nullable=False, index=True)   # SHA-256 of normalized question
+    question_text = Column(Text, nullable=False)                     # original question for readability
+    answer_text = Column(Text, nullable=False)                       # cached bot response
+    language = Column(String(5), default="nl")                       # nl or en
+    hit_count = Column(Integer, default=1)                           # times this cache entry was served
+    last_hit_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+

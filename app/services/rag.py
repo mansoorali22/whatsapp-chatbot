@@ -12,6 +12,7 @@ from langchain_core.output_parsers import StrOutputParser
 from app.core.config import settings
 from app.db.models import ChatLog, UserProfile
 from app.services.profile_extractor import extract_profile_fields, upsert_profile
+from app.services.faq_cache import get_cached_answer, cache_answer
 
 # Single opening message (first message / greeting) -- no duplicate text
 OPENING_MESSAGE_NL = (
@@ -654,6 +655,28 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
     questions = _split_into_questions(user_input)
 
+    # D/E5: FAQ cache -- skip expensive retrieval+LLM if we have a cached answer
+    # Only use cache for users WITHOUT a profile (personalized answers shouldn't be cached)
+    if not _profile_context and len(questions) == 1:
+        cached = get_cached_answer(db, user_input)
+        if cached:
+            # Log the cached response for analytics (cost = 0)
+            db.add(ChatLog(
+                whatsapp_number=whatsapp_number,
+                user_message=user_input,
+                bot_response=cached,
+                response_type="answered",
+                chunks_used=[],
+                prompt_tokens=0,
+                completion_tokens=0,
+                cost_usd=0.0,
+                model="faq_cache",
+                history_snapshot=[],
+            ))
+            db.commit()
+            final = _prepend_welcome_if_first(cached, is_first_message, user_input)
+            return final
+
     # D/E4: Boost retrieval for meal/recipe queries to surface more options
     _retrieval_k = settings.RETRIEVAL_TOP_K + 4 if _is_meal_query(user_input) else settings.RETRIEVAL_TOP_K
 
@@ -863,6 +886,15 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 upsert_profile(db, whatsapp_number, profile_fields)
         except Exception as e:
             print(f"Profile extraction error (non-fatal): {e}")
+
+    # -----------------------------
+    # 6c. FAQ CACHE WRITE (D/E5)
+    # -----------------------------
+    if response_type == "answered" and len(questions) == 1:
+        try:
+            cache_answer(db, user_input, answer, language_code)
+        except Exception as e:
+            print(f"FAQ cache write error (non-fatal): {e}")
 
     # -----------------------------
     # 7. CLEANUP OLD CHAT LOGS (FIXED)
