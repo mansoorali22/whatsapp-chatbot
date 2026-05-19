@@ -162,10 +162,14 @@ settings = Settings()
 # Optional debug print to verify
 # -------------------------------
 print("\n[Config] Settings loaded successfully:")
-print(f"  DATABASE_URL: {settings.DATABASE_URL[:50]}...")
-print(f"  OPENAI_API_KEY: {settings.OPENAI_API_KEY[:7]}...")
-print(f"  WHATSAPP_ACCESS_TOKEN: {str(settings.WHATSAPP_ACCESS_TOKEN)[:7]}...")
-print(f"  WHATSAPP_PHONE_ID: {settings.WHATSAPP_PHONE_ID}")
-print(f"  WHATSAPP_BUSINESS_ACCOUNT_ID: {settings.WHATSAPP_BUSINESS_ACCOUNT_ID}")
-print(f"  WEBHOOK_VERIFY_TOKEN: {settings.WEBHOOK_VERIFY_TOKEN}")
-print(f"  PLUG_N_PAY_TOKEN: {settings.PLUG_N_PAY_TOKEN}")
+print(f"  DATABASE_URL: {'***set***' if settings.DATABASE_URL else 'NOT SET'}")
+print(f"  OPENAI_API_KEY: {'***set***' if settings.OPENAI_API_KEY else 'NOT SET'}")
+print(f"  WHATSAPP_ACCESS_TOKEN: {'***set***' if settings.WHATSAPP_ACCESS_TOKEN else 'NOT SET'}")
+print(f"  WHATSAPP_PHONE_ID: {'***set***' if settings.WHATSAPP_PHONE_ID else 'NOT SET'}")
+print(f"  WHATSAPP_BUSINESS_ACCOUNT_ID: {'***set***' if settings.WHATSAPP_BUSINESS_ACCOUNT_ID else 'NOT SET'}")
+print(f"  WEBHOOK_VERIFY_TOKEN: {'***set***' if settings.WEBHOOK_VERIFY_TOKEN else 'NOT SET'}")
+print(f"  PLUG_N_PAY_TOKEN: {'***set***' if settings.PLUG_N_PAY_TOKEN else 'NOT SET'}")
+
+# D/E7: Warn if JWT secret is still the insecure default
+if settings.ADMIN_JWT_SECRET == "change-me-to-a-long-random-string":
+    print("\n  *** WARNING: ADMIN_JWT_SECRET is still the default! Set a secure random string in production. ***\n")

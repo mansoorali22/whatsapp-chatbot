@@ -14,6 +14,11 @@ from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+# Rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 # App imports
 from app.db.connection import init_db, get_db, SessionLocal
 from app.db.models import ProcessedMessage, Subscription
@@ -56,6 +61,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Atleet Buddy AI", lifespan=lifespan)
 scheduler = BackgroundScheduler()
 
+# D/E7: Rate limiting — protects webhooks and admin API from abuse
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Build CORS origins: always include local dev, plus dashboard origins from env
 _dashboard_origins = [
@@ -74,8 +83,8 @@ app.add_middleware(
     allow_origins=origins,
     allow_origin_regex=_allow_origin_regex,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allows all headers (incl. Authorization)
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 @app.exception_handler(Exception)
@@ -85,7 +94,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     traceback.print_exc()
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Internal server error: {type(exc).__name__}: {exc}"},
+        content={"detail": "Internal server error"},
     )
 
 app.include_router(whatsapp.router, prefix="/whatsapp", tags=["WhatsApp"])
@@ -108,5 +117,17 @@ def root():
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
-    """Health check endpoint. HEAD allowed for Render health checks."""
-    return {"status": "healthy", "service": "Atleet Buddy AI"}
+    """Health check endpoint with DB connectivity verification. HEAD allowed for Render health checks."""
+    from sqlalchemy import text
+    db_status = "ok"
+    try:
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+    except Exception:
+        db_status = "unavailable"
+    status = "healthy" if db_status == "ok" else "degraded"
+    result = {"status": status, "service": "Atleet Buddy AI", "database": db_status}
+    if db_status != "ok":
+        return JSONResponse(content=result, status_code=503)
+    return result

@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Request, Response, BackgroundTasks, Depends, Query
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 import httpx
@@ -18,6 +20,7 @@ from app.db.models import Subscription, ChatLog, ProcessedMessage
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+limiter = Limiter(key_func=get_remote_address)
 
 
 # -------------------------------
@@ -146,6 +149,7 @@ def _process_webhook_messages(body: dict, db: Session, background_tasks: Backgro
 
 
 @router.post("/get-messages")
+@limiter.limit("60/minute")
 async def receive_message(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -186,6 +190,7 @@ async def receive_message(
 # 3️⃣ MANUAL SEND MESSAGE ENDPOINT
 # -------------------------------
 @router.post("/send")
+@limiter.limit("10/minute")
 async def send_message_to_user(
     to: str,
     message: str

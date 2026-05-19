@@ -8,13 +8,15 @@ GET  /admin/auth/support-accounts   - list support accounts (admin only)
 POST /admin/auth/support-accounts   - create support account (admin only)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import bcrypt
 import jwt
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.core.config import settings
 from app.db.connection import get_db
@@ -22,6 +24,7 @@ from app.db.models import AdminUser, AuditEvent
 from app.middleware.admin_auth import get_current_admin, require_admin_role
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 # --- Request / Response schemas ---
@@ -72,7 +75,8 @@ class SupportAccountOut(BaseModel):
 # --- Endpoints ---
 
 @router.post("/login", response_model=LoginResponse)
-def admin_login(body: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def admin_login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
     """Authenticate an admin user with email + password. Returns a JWT."""
     admin = db.query(AdminUser).filter(AdminUser.email == body.email).first()
     if admin is None:

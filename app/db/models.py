@@ -10,7 +10,7 @@ class Subscription(Base):
     whatsapp_number = Column(String(20), unique=True, index=True, nullable=False)
     
     # --- Status & Identification ---
-    status = Column(String(20), default="inactive") # active, expired, blocked
+    status = Column(String(20), default="inactive", index=True) # active, expired, blocked
     plan_name = Column(String(50), nullable=True)   # Buddy Start, Buddy Pro, etc.
     is_recurring = Column(Boolean, default=False)   # True for (3,4,5), False for (1,2)
     plugnpay_customer_id = Column(String(100), nullable=True)
@@ -23,7 +23,7 @@ class Subscription(Base):
     # --- Trial & Subscription Logic ---
     is_trial = Column(Boolean, default=True)
     subscription_start = Column(DateTime(timezone=True), nullable=True)
-    subscription_end = Column(DateTime(timezone=True), nullable=True) # Expiry date
+    subscription_end = Column(DateTime(timezone=True), nullable=True, index=True) # Expiry date
     
     # --- Timestamps ---
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -82,7 +82,7 @@ class ChatLog(Base):
     history_snapshot = Column(JSON, nullable=True) 
 
     # --- Your Strict Mode A Audit Fields ---
-    response_type = Column(String(50)) # 'answered', 'refused', 'error'
+    response_type = Column(String(50), index=True) # 'answered', 'refused', 'error'
     chunks_used = Column(JSON, nullable=True) # IDs and metadata of the PDF chunks
 
     # --- B4: Refusal Analytics ---
@@ -95,7 +95,7 @@ class ChatLog(Base):
     model = Column(String(128), nullable=True)
 
     # --- Timestamps ---
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 # High-performance index for finding a specific user's history
 Index('idx_user_history', ChatLog.whatsapp_number, ChatLog.created_at)
@@ -121,13 +121,13 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
 
     id = Column(Integer, primary_key=True)
-    actor_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True)
+    actor_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True, index=True)
     actor_email = Column(String(255), nullable=False)
     action = Column(String(50), nullable=False)       # PLAN_CHANGE, STATUS_CHANGE, BLOCK, UNBLOCK, SEND_MESSAGE, LOGIN, etc.
     target_type = Column(String(20), nullable=True)    # 'user', 'alert', 'config'
     target_id = Column(String(100), nullable=True)     # whatsapp_number or alert ID
     details = Column(JSON, nullable=True)              # {from: 'monthly', to: 'quarterly', reason: '...'}
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 # ===========================
