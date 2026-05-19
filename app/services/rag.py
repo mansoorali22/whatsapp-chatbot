@@ -248,35 +248,25 @@ def _user_asks_for_reference(user_message: str) -> bool:
 
 
 def _format_references_line(used_docs: list, use_dutch: bool) -> str:
-    """Build a single references line from excerpt metadata (page or section)."""
+    """Build a short references line from excerpt metadata (1-3 most relevant pages)."""
     if not used_docs:
         return ""
     seen = set()
-    parts = []
+    pages = []
     for meta in used_docs:
         page = meta.get("page")
-        chunk = meta.get("chunk_index", "?")
         if page is not None and str(page).strip() and str(page) != "N/A":
-            key = ("p", page)
-            if key not in seen:
-                seen.add(key)
-                if use_dutch:
-                    parts.append(f"pagina {page}")
-                else:
-                    parts.append(f"page {page}")
-        else:
-            key = ("s", chunk)
-            if key not in seen:
-                seen.add(key)
-                if use_dutch:
-                    parts.append(f"sectie {chunk}")
-                else:
-                    parts.append(f"section {chunk}")
-    if not parts:
+            p = str(page).strip()
+            if p not in seen:
+                seen.add(p)
+                pages.append(p)
+    # Limit to 3 most relevant pages
+    pages = pages[:3]
+    if not pages:
         return ""
     if use_dutch:
-        return "Referenties: " + ", ".join(parts)
-    return "References: " + ", ".join(parts)
+        return "Bron: pagina " + ", ".join(pages)
+    return "Source: page " + ", ".join(pages)
 
 
 def _answer_has_page_reference(answer: str) -> bool:
@@ -512,7 +502,12 @@ def init_rag_components():
             "9. **OPTIONAL FOLLOW-UP.** After a substantive answer, you MAY end with ONE short suggestion of a natural follow-up the user might want next (e.g. 'Wil je dat ik dit toepas op jouw trainingsdag?'). Only when the topic naturally invites depth -- never on greetings, thanks, refusals, or when you just asked a clarifying question.\n"
             if enable_followup else ""
         )
-        + "10. **REFERENCES.** When the user asks for a reference / source / page (words like 'page','pagina','bladzijde','bron','referentie','where','waar','source'), include the page/section numbers from the excerpt labels. Use 'page N' in English, 'pagina N' in Dutch. Otherwise do NOT add page numbers.\n"
+        + "10. **REFERENCES.** Always include a brief source reference at the end of your answer. "
+        "Format: '\U0001f4d6 Bron: pagina X' (Dutch) or '\U0001f4d6 Source: page X' (English). "
+        "List the 1-3 most relevant page numbers from the excerpts you used. "
+        "Keep it short -- just the page numbers, no full citations. "
+        "Example: '\U0001f4d6 Bron: pagina 45, 78'. "
+        "If the user specifically asks for detailed references, include the section/chapter name too.\n"
         "11. **DISCLAIMER.** Only when you give specific nutrient amounts or portion sizes, add ONE short sentence in {language}: Dutch: 'Dit is algemene informatie; voor persoonlijk advies kun je een (sport)dietist raadplegen.' English: 'This is general information; for personal advice you can consult a (sports) dietitian.'\n"
         "12. **REFUSE ONLY WHEN TRULY OFF-TOPIC.** Off-topic = politics, code, medical diagnosis, anything unrelated to food, eating, sport, recovery, recipes, hydration, age groups, body composition. Anything about nutrition -- including for older adults, beginners, casual exercisers, or people with general health goals -- is IN scope. The book covers sports nutrition broadly; do NOT refuse just because the user is not a competitive athlete.\n"
         "13. **REFUSAL FORMAT.** When (and only when) you must refuse, reply with EXACTLY one of these single lines and nothing else:\n"
@@ -738,10 +733,11 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 part = _strip_refusal_from_answer(part)
                 part = _localize_page_citations(q, part)
                 all_used_docs.extend(doc.metadata for doc, _ in relevant_docs)
-                if _user_asks_for_reference(q) and not _answer_has_page_reference(part):
+                # D/E6: always append soft citation if the LLM didn't already include one
+                if not _answer_has_page_reference(part):
                     ref_line = _format_references_line([doc.metadata for doc, _ in relevant_docs], use_dutch=_message_suggests_dutch(q))
                     if ref_line:
-                        part = (part.rstrip() + "\n\n" + ref_line).strip()
+                        part = (part.rstrip() + "\n\n\U0001f4d6 " + ref_line).strip()
                 parts.append(part)
         answer = "\n\n".join(f"{i+1}. {p}" for i, p in enumerate(parts))
         used_docs = all_used_docs
@@ -840,13 +836,13 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             answer = _localize_page_citations(user_input, answer)
 
             used_docs = [doc.metadata for doc, _ in relevant_docs]
-            # If user asked for reference/source/page but the model didn't include one, append references from excerpts
-            if _user_asks_for_reference(user_input) and not _answer_has_page_reference(answer):
+            # D/E6: always append soft citation if the LLM didn't already include one
+            if not _answer_has_page_reference(answer):
                 ref_line = _format_references_line(
                     used_docs, use_dutch=_message_suggests_dutch(user_input)
                 )
                 if ref_line:
-                    answer = (answer.rstrip() + "\n\n" + ref_line).strip()
+                    answer = (answer.rstrip() + "\n\n\U0001f4d6 " + ref_line).strip()
 
             # Only treat as refused if answer is essentially the refusal (no substantive content)
             response_type = _is_refusal_response(answer)
