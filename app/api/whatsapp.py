@@ -192,6 +192,7 @@ async def receive_message(
 @router.post("/send")
 @limiter.limit("10/minute")
 async def send_message_to_user(
+    request: Request,
     to: str,
     message: str
 ):
