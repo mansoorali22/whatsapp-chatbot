@@ -529,6 +529,13 @@ def init_rag_components():
         "lead with those rather than abstract principles. Users remember concrete examples better "
         "than rules. If the book mentions a specific recipe as a pre-workout meal, say that "
         "specifically rather than 'a carbohydrate-rich breakfast'.\n"
+        "18. **MEAL SUGGESTIONS.** When the user asks about meals, snacks, or 'what to eat':\n"
+        "   - Suggest specific foods/meals from the book excerpts, not categories\n"
+        "   - Include practical details: ingredients and rough portions when the book provides them\n"
+        "   - For recipe names mentioned in the book, cite the page so the user can look it up\n"
+        "   - If the user has dietary preferences in their profile, filter suggestions accordingly\n"
+        "   - Offer 2-3 options when possible so the user has choice\n"
+        "   - Keep it inspiring -- 'Try the Chunky Monkey oats from page 45!' not 'Consider a carbohydrate-based meal'\n"
     )
 
     _answer_prompt = ChatPromptTemplate.from_messages([
@@ -545,6 +552,22 @@ def init_rag_components():
     answer_chain_raw = _answer_prompt | llm
 
     print("RAG components initialized")
+
+
+# D/E4: Meal-related keywords for retrieval boost
+_MEAL_KEYWORDS = [
+    "meal", "recipe", "eat", "food", "snack", "breakfast", "lunch", "dinner",
+    "pre-workout", "post-workout", "before training", "after training",
+    "maaltijd", "recept", "eten", "ontbijt", "avondeten", "tussendoortje",
+    "voor het sporten", "na het sporten", "wat kan ik eten", "what can i eat",
+    "what should i eat", "wat moet ik eten",
+]
+
+
+def _is_meal_query(text: str) -> bool:
+    """True if the message is about meals, recipes, or food suggestions."""
+    lower = text.lower()
+    return any(kw in lower for kw in _MEAL_KEYWORDS)
 
 
 # -----------------------------
@@ -631,6 +654,9 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
     questions = _split_into_questions(user_input)
 
+    # D/E4: Boost retrieval for meal/recipe queries to surface more options
+    _retrieval_k = settings.RETRIEVAL_TOP_K + 4 if _is_meal_query(user_input) else settings.RETRIEVAL_TOP_K
+
     # --- B3: Token tracking accumulators (set to 0; filled by answer paths) ---
     _prompt_tokens = 0
     _completion_tokens = 0
@@ -659,7 +685,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 continue
             rewritten = rewrite_chain.invoke({"chat_history": [], "input": q})
             try:
-                docs_with_scores = retriever.similarity_search_with_score(rewritten, k=settings.RETRIEVAL_TOP_K)
+                docs_with_scores = retriever.similarity_search_with_score(rewritten, k=_retrieval_k)
             except OperationalError:
                 docs_with_scores = []
             relevant_docs = [(doc, s) for doc, s in docs_with_scores if s <= settings.SIMILARITY_THRESHOLD]
@@ -711,7 +737,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         def _do_retrieval():
             return retriever.similarity_search_with_score(
                 rewritten_query,
-                k=settings.RETRIEVAL_TOP_K
+                k=_retrieval_k
             )
 
         try:
