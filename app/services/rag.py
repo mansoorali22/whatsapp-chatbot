@@ -260,10 +260,11 @@ def _format_references_line(used_docs: list, use_dutch: bool) -> str:
             if p not in seen:
                 seen.add(p)
                 pages.append(p)
-    # Limit to 3 most relevant pages
-    pages = pages[:3]
     if not pages:
         return ""
+    # Sort numerically and limit to 3
+    pages.sort(key=lambda p: int(p) if p.isdigit() else 0)
+    pages = pages[:3]
     if use_dutch:
         return "Bron: pagina " + ", ".join(pages)
     return "Source: page " + ", ".join(pages)
@@ -733,8 +734,8 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                 part = _strip_refusal_from_answer(part)
                 part = _localize_page_citations(q, part)
                 all_used_docs.extend(doc.metadata for doc, _ in relevant_docs)
-                # D/E6: always append soft citation if the LLM didn't already include one
-                if not _answer_has_page_reference(part):
+                # D/E6: always append soft citation — but NOT on refusal parts
+                if _is_refusal_response(part) != "refused" and not _answer_has_page_reference(part):
                     ref_line = _format_references_line([doc.metadata for doc, _ in relevant_docs], use_dutch=_message_suggests_dutch(q))
                     if ref_line:
                         part = (part.rstrip() + "\n\n\U0001f4d6 " + ref_line).strip()
@@ -836,18 +837,19 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             answer = _localize_page_citations(user_input, answer)
 
             used_docs = [doc.metadata for doc, _ in relevant_docs]
-            # D/E6: always append soft citation if the LLM didn't already include one
-            if not _answer_has_page_reference(answer):
-                ref_line = _format_references_line(
-                    used_docs, use_dutch=_message_suggests_dutch(user_input)
-                )
-                if ref_line:
-                    answer = (answer.rstrip() + "\n\n\U0001f4d6 " + ref_line).strip()
 
             # Only treat as refused if answer is essentially the refusal (no substantive content)
             response_type = _is_refusal_response(answer)
             if response_type == "refused":
                 _refusal_category = _classify_refusal(user_input, answer, had_relevant_docs=True)
+
+            # D/E6: always append soft citation — but NOT on refusals
+            if response_type == "answered" and not _answer_has_page_reference(answer):
+                ref_line = _format_references_line(
+                    used_docs, use_dutch=_message_suggests_dutch(user_input)
+                )
+                if ref_line:
+                    answer = (answer.rstrip() + "\n\n\U0001f4d6 " + ref_line).strip()
 
     # 6. Save chat log
     db.add(ChatLog(
