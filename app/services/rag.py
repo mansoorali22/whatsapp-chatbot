@@ -533,6 +533,17 @@ def init_rag_components():
         "   - If the user has dietary preferences in their profile, filter suggestions accordingly\n"
         "   - Offer 2-3 options when possible so the user has choice\n"
         "   - Keep it inspiring -- 'Try the Chunky Monkey oats from page 45!' not 'Consider a carbohydrate-based meal'\n"
+        "19. **SUPPLEMENTS vs NUTRITION.** Only discuss supplements (creatine, caffeine pills, beetroot juice extract, "
+        "protein shakes, vitamin tablets, etc.) when the user explicitly asks about supplements or supplementation. "
+        "For general nutrition questions like 'what should I eat before training', recommend real foods from the book -- "
+        "NOT supplement products. If a retrieved excerpt is about supplements but the question is about food/meals, "
+        "ignore that excerpt and focus on the food-based excerpts instead.\n"
+        "20. **ASK BEFORE PERSONALIZING.** When the user asks for a personalized plan, recommendation, or specific amounts "
+        "and you do NOT have enough profile data (weight, sport type, training frequency), ask 1-2 short questions first "
+        "before giving your advice. For example: 'Om je een goed advies te geven: welke sport doe je, hoe vaak train je, "
+        "en wat is je gewicht?' (Dutch) or 'To give you the best advice: what sport do you do, how often do you train, "
+        "and what is your weight?' (English). Once you have enough context, give the personalized answer. "
+        "Do NOT generate a full plan based on assumptions -- ask first, advise second.\n"
     )
 
     _answer_prompt = ChatPromptTemplate.from_messages([
@@ -565,6 +576,38 @@ def _is_meal_query(text: str) -> bool:
     """True if the message is about meals, recipes, or food suggestions."""
     lower = text.lower()
     return any(kw in lower for kw in _MEAL_KEYWORDS)
+
+
+# Supplement-related keywords — used to decide whether to keep supplement chunks
+_SUPPLEMENT_KEYWORDS = [
+    "supplement", "supplementen", "creatine", "caffeine", "cafeine",
+    "vitamine", "vitamin", "pillen", "capsule", "tablet", "shake",
+    "poeder", "powder", "pre-workout", "sportdrank",
+]
+
+
+def _is_supplement_query(text: str) -> bool:
+    """True if the user explicitly asks about supplements."""
+    lower = text.lower()
+    return any(kw in lower for kw in _SUPPLEMENT_KEYWORDS)
+
+
+def _is_supplement_chunk(doc) -> bool:
+    """True if a retrieved chunk is about supplements (by content keywords)."""
+    content = doc.page_content.lower() if hasattr(doc, 'page_content') else ""
+    supplement_signals = ["supplement", "creatine", "caffeine", "cafeine",
+                          "bietensap", "beetroot juice", "ergogeen", "ergogenic"]
+    return sum(1 for s in supplement_signals if s in content) >= 2
+
+
+def _filter_supplement_chunks(docs_with_scores: list, user_input: str) -> list:
+    """Remove supplement-heavy chunks when the user didn't ask about supplements."""
+    if _is_supplement_query(user_input):
+        return docs_with_scores  # keep everything
+    filtered = [(doc, score) for doc, score in docs_with_scores
+                if not _is_supplement_chunk(doc)]
+    # If filtering removed everything, return original (better than nothing)
+    return filtered if filtered else docs_with_scores
 
 
 # -----------------------------
@@ -705,6 +748,7 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
             rewritten = rewrite_chain.invoke({"chat_history": [], "input": q})
             try:
                 docs_with_scores = retriever.similarity_search_with_score(rewritten, k=_retrieval_k)
+                docs_with_scores = _filter_supplement_chunks(docs_with_scores, q)
             except OperationalError:
                 docs_with_scores = []
             relevant_docs = [(doc, s) for doc, s in docs_with_scores if s <= settings.SIMILARITY_THRESHOLD]
@@ -776,6 +820,9 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
                     return answer
             else:
                 raise
+
+        # Filter out supplement chunks when not asking about supplements
+        docs_with_scores = _filter_supplement_chunks(docs_with_scores, user_input)
 
         relevant_docs = [
             (doc, score)
