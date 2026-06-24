@@ -694,6 +694,55 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
 
     questions = _split_into_questions(user_input)
 
+    # D/E7 fix: If the question needs personalization but we have no profile, ask first
+    _PERSONAL_KEYWORDS = [
+        "how much", "hoeveel", "what should i", "wat moet ik",
+        "for me", "voor mij", "my", "mijn",
+        "do i need", "heb ik nodig", "plan", "schema",
+        "how many", "how often", "hoe vaak",
+    ]
+
+    def _needs_personalization(text: str) -> bool:
+        lower = text.lower()
+        return any(kw in lower for kw in _PERSONAL_KEYWORDS)
+
+    if not _profile and _needs_personalization(user_input):
+        if language_code == "nl":
+            ask_reply = (
+                "Om je een persoonlijk advies te geven, heb ik wat meer info nodig. "
+                "Kun je me vertellen:\n"
+                "- Welke sport doe je?\n"
+                "- Hoe vaak train je per week?\n"
+                "- Wat is je gewicht?\n"
+                "- Wat is je doel? (bijv. afvallen, spiermassa opbouwen, prestatie verbeteren)\n\n"
+                "Dan kan ik je veel gerichter helpen!"
+            )
+        else:
+            ask_reply = (
+                "To give you personalized advice, I need a bit more info. "
+                "Could you tell me:\n"
+                "- What sport do you do?\n"
+                "- How often do you train per week?\n"
+                "- What is your weight?\n"
+                "- What is your goal? (e.g. weight loss, muscle gain, performance)\n\n"
+                "Then I can give you much more tailored advice!"
+            )
+        final = _prepend_welcome_if_first(ask_reply, is_first_message, user_input)
+        db.add(ChatLog(
+            whatsapp_number=whatsapp_number,
+            user_message=user_input,
+            bot_response=final,
+            response_type="answered",
+            chunks_used=[],
+            history_snapshot=[],
+            prompt_tokens=0,
+            completion_tokens=0,
+            cost_usd=0.0,
+            model="profile_ask",
+        ))
+        db.commit()
+        return final
+
     # D/E5: FAQ cache -- skip expensive retrieval+LLM if we have a cached answer
     # Only use cache for users WITHOUT a profile (personalized answers shouldn't be cached)
     if not _profile_context and len(questions) == 1:
