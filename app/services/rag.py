@@ -697,16 +697,28 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
     # D/E7 fix: If the question needs personalization but we have no profile, ask first
     _PERSONAL_KEYWORDS = [
         "how much", "hoeveel", "what should i", "wat moet ik",
-        "for me", "voor mij", "my", "mijn",
-        "do i need", "heb ik nodig", "plan", "schema",
-        "how many", "how often", "hoe vaak",
+        "for me", "voor mij", "do i need", "heb ik nodig",
+        "plan", "schema", "how many", "how often", "hoe vaak",
     ]
+
+    # Detect when user is PROVIDING profile info (not asking a question)
+    _PROFILE_INFO_SIGNALS = [
+        "i am ", "ik ben ", "i weigh", "ik weeg", "i do ", "ik doe ",
+        "i train", "ik train", "my weight is", "mijn gewicht",
+        "my goal", "mijn doel", "kg", "kilo",
+        "times per week", "keer per week", "x per week",
+    ]
+
+    def _is_providing_profile_info(text: str) -> bool:
+        lower = text.lower()
+        matches = sum(1 for s in _PROFILE_INFO_SIGNALS if s in lower)
+        return matches >= 2  # At least 2 profile signals = they're giving info
 
     def _needs_personalization(text: str) -> bool:
         lower = text.lower()
         return any(kw in lower for kw in _PERSONAL_KEYWORDS)
 
-    if not _profile and _needs_personalization(user_input):
+    if not _profile and _needs_personalization(user_input) and not _is_providing_profile_info(user_input):
         if language_code == "nl":
             ask_reply = (
                 "Om je een persoonlijk advies te geven, heb ik wat meer info nodig. "
@@ -742,6 +754,31 @@ def get_response(user_input: str, whatsapp_number: str, db: Session, is_first_me
         ))
         db.commit()
         return final
+
+    # If user is providing profile info and we don't have a profile yet, extract it NOW
+    # so the answer below is already personalized
+    if not _profile and _is_providing_profile_info(user_input):
+        try:
+            early_fields = extract_profile_fields(user_input, "")
+            if early_fields:
+                upsert_profile(db, whatsapp_number, early_fields)
+                db.commit()
+                # Reload profile context
+                _profile = db.query(UserProfile).filter_by(whatsapp_number=whatsapp_number).first()
+                if _profile:
+                    parts = []
+                    if _profile.age: parts.append(f"Age: {_profile.age}")
+                    if _profile.weight_kg: parts.append(f"Weight: {_profile.weight_kg}kg")
+                    if _profile.height_cm: parts.append(f"Height: {_profile.height_cm}cm")
+                    if _profile.sport: parts.append(f"Sport: {_profile.sport}")
+                    if _profile.goals: parts.append(f"Goals: {_profile.goals}")
+                    if _profile.training_frequency: parts.append(f"Training: {_profile.training_frequency}")
+                    if _profile.dietary_preferences: parts.append(f"Diet: {_profile.dietary_preferences}")
+                    if parts:
+                        _profile_context = "User profile: " + ", ".join(parts)
+                print(f"Early profile extraction saved for {whatsapp_number}")
+        except Exception as e:
+            print(f"Early profile extraction failed (non-fatal): {e}")
 
     # D/E5: FAQ cache -- skip expensive retrieval+LLM if we have a cached answer
     # Only use cache for users WITHOUT a profile (personalized answers shouldn't be cached)
