@@ -140,7 +140,11 @@ async def _fetch_order_details(order_id: int) -> dict:
     url = api_url.rstrip("/") + path + "?include=billing,custom_fields"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+            r = await client.get(url, headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "User-Agent": "AtleetBuddyAI/1.0",
+            })
             if r.status_code != 200:
                 logger.warning("PlugAndPay API order %s returned %s: %s", order_id, r.status_code, (r.text or "")[:200])
                 return out
